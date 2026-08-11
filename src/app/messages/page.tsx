@@ -51,7 +51,7 @@ export default function MessagesPage() {
     try {
       const { data: agentsData } = await supabase.from('agents').select('id, name').order('name');
       const { data: messagesData } = await supabase
-        .from('messages')
+        .from('agent_dispatch_messages')
         .select('*')
         .order('created_at', { ascending: false })
         .limit(100);
@@ -81,7 +81,7 @@ export default function MessagesPage() {
       .channel('messages-feed')
       .on(
         'postgres_changes',
-        { event: 'INSERT', schema: 'public', table: 'messages' },
+        { event: 'INSERT', schema: 'public', table: 'agent_dispatch_messages' },
         (payload) => {
           setMessages((prev) => [payload.new as Message, ...prev.slice(0, 99)]);
         }

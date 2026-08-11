@@ -115,7 +115,7 @@ export async function POST(request: Request) {
     }
 
     // Create a message in log format too to show command trigger in log feed
-    await supabase.from('messages').insert({
+    await supabase.from('agent_dispatch_messages').insert({
       from_agent_id: agent_id,
       content: `Received command: ${command_type.toUpperCase()} (issued by ${issued_by}). Status: ${finalStatus.toUpperCase()}`,
       type: finalStatus === 'failed' ? 'error' : 'log',
