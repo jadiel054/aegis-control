@@ -56,7 +56,7 @@ export async function POST(request: Request) {
 
     // Insert message
     const { data: insertedMessage, error: insertError } = await supabase
-      .from('messages')
+      .from('agent_dispatch_messages')
       .insert({
         from_agent_id,
         to_agent_id: to_agent_id || null,

@@ -39,7 +39,8 @@ CREATE TABLE IF NOT EXISTS public.commands (
 );
 
 -- 4. Create table 'messages'
-CREATE TABLE IF NOT EXISTS public.messages (
+-- 4. Create table 'agent_dispatch_messages'
+CREATE TABLE IF NOT EXISTS public.agent_dispatch_messages (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     from_agent_id UUID NOT NULL REFERENCES public.agents(id) ON DELETE CASCADE,
     to_agent_id UUID REFERENCES public.agents(id) ON DELETE CASCADE,
@@ -81,7 +82,7 @@ CREATE TABLE IF NOT EXISTS public.test_runs (
 ALTER TABLE public.agents ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.tasks ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.commands ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.messages ENABLE ROW LEVEL SECURITY;
+ALTER TABLE public.agent_dispatch_messages ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.security_incidents ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.test_runs ENABLE ROW LEVEL SECURITY;
 
@@ -89,7 +90,7 @@ ALTER TABLE public.test_runs ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Allow all public read/write to agents" ON public.agents FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow all public read/write to tasks" ON public.tasks FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow all public read/write to commands" ON public.commands FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "Allow all public read/write to messages" ON public.messages FOR ALL USING (true) WITH CHECK (true);
+CREATE POLICY "Allow all public read/write to agent_dispatch_messages" ON public.agent_dispatch_messages FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow all public read/write to security_incidents" ON public.security_incidents FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow all public read/write to test_runs" ON public.test_runs FOR ALL USING (true) WITH CHECK (true);
 
@@ -99,7 +100,7 @@ BEGIN;
   ALTER PUBLICATION supabase_realtime DROP TABLE IF EXISTS public.agents;
   ALTER PUBLICATION supabase_realtime DROP TABLE IF EXISTS public.tasks;
   ALTER PUBLICATION supabase_realtime DROP TABLE IF EXISTS public.commands;
-  ALTER PUBLICATION supabase_realtime DROP TABLE IF EXISTS public.messages;
+  ALTER PUBLICATION supabase_realtime DROP TABLE IF EXISTS public.agent_dispatch_messages;
   ALTER PUBLICATION supabase_realtime DROP TABLE IF EXISTS public.security_incidents;
   ALTER PUBLICATION supabase_realtime DROP TABLE IF EXISTS public.test_runs;
 
@@ -107,7 +108,7 @@ BEGIN;
   ALTER PUBLICATION supabase_realtime ADD TABLE public.agents;
   ALTER PUBLICATION supabase_realtime ADD TABLE public.tasks;
   ALTER PUBLICATION supabase_realtime ADD TABLE public.commands;
-  ALTER PUBLICATION supabase_realtime ADD TABLE public.messages;
+  ALTER PUBLICATION supabase_realtime ADD TABLE public.agent_dispatch_messages;
   ALTER PUBLICATION supabase_realtime ADD TABLE public.security_incidents;
   ALTER PUBLICATION supabase_realtime ADD TABLE public.test_runs;
 COMMIT;
