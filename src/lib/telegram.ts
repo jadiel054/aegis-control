@@ -25,7 +25,6 @@ export async function sendTelegramMessage(
   text: string,
   extra?: Record<string, unknown>
 ) {
-  // Telegram limit ~4096; chunk if needed
   const chunks: string[] = [];
   let remaining = text;
   while (remaining.length > 3900) {
@@ -89,11 +88,13 @@ export async function getTelegramWebhookInfo(token: string) {
 }
 
 export const AEGIS_BOT_COMMANDS = [
-  { command: 'start', description: 'Início e teclado' },
-  { command: 'status', description: 'Status do fleet' },
-  { command: 'resumo', description: 'Resumo do que aconteceu' },
-  { command: 'pending', description: 'Aguardando confirmação' },
-  { command: 'id', description: 'Meu chat_id' },
+  { command: 'start', description: 'Início' },
+  { command: 'mission', description: 'Criar missão compartilhada' },
+  { command: 'approve', description: 'Aprovar passo (task_id)' },
+  { command: 'reject', description: 'Rejeitar missão' },
+  { command: 'status', description: 'Fleet' },
+  { command: 'resumo', description: 'Resumo' },
+  { command: 'pending', description: 'Aguardando aprovação' },
   { command: 'help', description: 'Ajuda' },
 ];
 

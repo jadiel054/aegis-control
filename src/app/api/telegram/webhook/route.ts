@@ -1,5 +1,11 @@
 import { NextResponse } from 'next/server';
 import { getSql } from '@/lib/db';
+import {
+  approveStep,
+  createMission,
+  getMission,
+  rejectStep,
+} from '@/lib/dispatcher';
 import { jarvisReply } from '@/lib/jarvis-brain';
 import { buildFleetResumo, formatResumoHtml } from '@/lib/fleet-notify';
 import {
@@ -77,7 +83,6 @@ export async function POST(request: Request) {
 
     await sendChatAction(token, chatId, 'typing').catch(() => {});
 
-    // --- Media: photo ---
     const photoId = largestPhoto(message);
     let visionNote = '';
     if (photoId) {
@@ -99,7 +104,6 @@ export async function POST(request: Request) {
       }
     }
 
-    // document image mime
     if (!photoId && message.document?.mime_type?.startsWith('image/')) {
       try {
         const file = await getTelegramFile(token, message.document.file_id);
@@ -113,21 +117,19 @@ export async function POST(request: Request) {
         visionNote = `Documento imagem: ${e.message}`;
       }
     } else if (message.document && !photoId) {
-      visionNote = `Recebi o arquivo <code>${message.document.file_name || 'documento'}</code> (${message.document.mime_type || 'tipo desconhecido'}). Análise automática de PDF/binário ainda limitada — descreva o que precisa ou envie print.`;
+      visionNote = `Arquivo <code>${message.document.file_name || 'doc'}</code> recebido. PDF completo ainda limitado — use print ou /mission.`;
     }
 
     await sql`
-      INSERT INTO agent_dispatch_messages (from_agent_id, to_agent_id, content, type)
+      INSERT INTO agent_dispatch_messages (from_agent_id, content, type)
       VALUES (
         ${agent.id},
-        NULL,
         ${JSON.stringify({
           source: 'telegram',
           chat_id: chatId,
           from,
           text,
           has_photo: Boolean(photoId),
-          vision_preview: visionNote ? visionNote.slice(0, 500) : null,
           update_id: update.update_id,
         })},
         'request'
@@ -135,8 +137,7 @@ export async function POST(request: Request) {
     `;
 
     await sql`
-      UPDATE agents SET status = 'online', last_heartbeat = NOW(),
-        metadata = COALESCE(metadata, '{}'::jsonb) || ${JSON.stringify({ last_telegram_chat_id: chatId })}::jsonb
+      UPDATE agents SET status = 'online', last_heartbeat = NOW()
       WHERE id = ${agent.id}
     `;
 
@@ -147,14 +148,14 @@ export async function POST(request: Request) {
         [
           `<b>Aegis · ${agent.name}</b>`,
           '',
-          'Hub do fleet: conversa, status, resumos e alertas.',
+          'Hub + dispatcher de missões compartilhadas.',
           '',
-          '/status — agentes',
-          '/resumo — o que rolou (tarefas, pendências, incidentes)',
-          '/pending — aguardando confirmação',
+          '/mission &lt;texto&gt; — cria tarefa Morpheus→Plutão→Zarith',
+          '/approve &lt;task_id&gt; — aprova passo (write-gate)',
+          '/reject &lt;task_id&gt; — rejeita',
+          '/status /resumo /pending',
           '',
-          'Envie <b>print/foto</b> para análise visual (Gemini).',
-          'Agentes podem me notificar em tempo real (progresso, falha, confirmação).',
+          'Foto = análise visual. Texto livre = conversa.',
         ].join('\n'),
         withKeyboard
       );
@@ -167,19 +168,12 @@ export async function POST(request: Request) {
     }
 
     if (text === '/status') {
-      const onlineAgents = await sql`
-        SELECT name, status, last_heartbeat FROM agents ORDER BY name LIMIT 30
-      `;
+      const onlineAgents = await sql`SELECT name, status, last_heartbeat FROM agents ORDER BY name LIMIT 30`;
       const lines = onlineAgents.map(
         (a: any) =>
-          `• <b>${a.name}</b> — ${a.status} (${a.last_heartbeat ? new Date(a.last_heartbeat).toLocaleString() : 'never'})`
+          `• <b>${a.name}</b> — ${a.status}`
       );
-      await sendTelegramMessage(
-        token,
-        chatId,
-        `<b>Fleet status</b>\n\n${lines.join('\n')}`,
-        withKeyboard
-      );
+      await sendTelegramMessage(token, chatId, `<b>Fleet</b>\n\n${lines.join('\n')}`, withKeyboard);
       return NextResponse.json({ ok: true });
     }
 
@@ -190,92 +184,117 @@ export async function POST(request: Request) {
     }
 
     if (text === '/pending') {
-      const data = await buildFleetResumo();
-      if (!data.pendingCommands.length && !data.openIncidents.length) {
-        await sendTelegramMessage(
-          token,
-          chatId,
-          'Nada pendente de confirmação no momento. ✅',
-          withKeyboard
-        );
+      const waiting = await sql`
+        SELECT t.id, t.title, s.role, s.agent_name, s.status
+        FROM task_steps s
+        JOIN tasks t ON t.id = s.task_id
+        WHERE s.status = 'awaiting_approval'
+        ORDER BY s.created_at DESC LIMIT 10
+      `;
+      if (!waiting.length) {
+        await sendTelegramMessage(token, chatId, 'Nenhuma missão aguardando aprovação. ✅', withKeyboard);
       } else {
-        const lines = ['<b>⏸️ Pendências</b>', ''];
-        for (const c of data.pendingCommands) {
-          lines.push(`• Comando <b>${c.command_type}</b> — ${c.status}`);
+        const lines = ['<b>⏸️ Aguardando sua aprovação</b>', ''];
+        for (const w of waiting) {
+          lines.push(`• <b>${w.title}</b> (${w.agent_name || w.role})`);
+          lines.push(`  <code>/approve ${w.id}</code>`);
         }
-        for (const i of data.openIncidents) {
-          lines.push(`• Incidente [${i.severity}] ${i.title}`);
-        }
-        lines.push('', 'Quando o write-gate estiver ativo, a aprovação será por aqui / no painel Aegis.');
         await sendTelegramMessage(token, chatId, lines.join('\n'), withKeyboard);
       }
       return NextResponse.json({ ok: true });
     }
 
-    // Pure vision reply if only photo
-    if (visionNote && !text) {
-      await sendTelegramMessage(token, chatId, visionNote, withKeyboard);
-      await sql`
-        INSERT INTO agent_dispatch_messages (from_agent_id, content, type)
-        VALUES (${agent.id}, ${visionNote}, 'response')
-      `;
+    // /mission <description>
+    if (text.startsWith('/mission ') || text.startsWith('/missao ')) {
+      const body = text.replace(/^\/(mission|missao)\s+/i, '').trim();
+      if (!body) {
+        await sendTelegramMessage(token, chatId, 'Uso: /mission descreva a tarefa', withKeyboard);
+        return NextResponse.json({ ok: true });
+      }
+      const { task, steps } = await createMission({
+        title: body.slice(0, 120),
+        description: body,
+        source: 'telegram',
+        created_by: `telegram:${chatId}`,
+      });
+      const plan = steps.map((s: any) => `${s.step_index}:${s.agent_name || s.role}[${s.status}]`).join(' → ');
+      await sendTelegramMessage(
+        token,
+        chatId,
+        `<b>Missão criada</b>\n<code>${task.id}</code>\n${body.slice(0, 200)}\n\nPipeline:\n${plan}\n\nOs agentes ainda precisam consumir o passo (SDK). Você será notificado em cada handoff / aprovação.`,
+        withKeyboard
+      );
       return NextResponse.json({ ok: true });
     }
 
-    // Text (+ optional vision context)
-    let userText = text || '(sem texto)';
-    if (visionNote) {
-      userText = `${text}\n\n[Análise da imagem anexada]\n${visionNote}`;
+    if (text.startsWith('/approve ')) {
+      const id = text.replace('/approve ', '').trim();
+      try {
+        const result = await approveStep(id, `telegram:${chatId}`);
+        await sendTelegramMessage(
+          token,
+          chatId,
+          `✅ Aprovado.\nStatus: <b>${result.status}</b>\nTask <code>${id}</code>`,
+          withKeyboard
+        );
+      } catch (e: any) {
+        await sendTelegramMessage(token, chatId, `Erro: ${e.message}`, withKeyboard);
+      }
+      return NextResponse.json({ ok: true });
     }
 
-    let reply =
-      'Recebi no Aegis. Configure GROQ_API_KEY (texto) e GOOGLE_API_KEY (visão) no Vercel.';
+    if (text.startsWith('/reject ')) {
+      const id = text.replace('/reject ', '').trim().split(/\s+/)[0];
+      try {
+        await rejectStep(id, 'Rejeitado via Telegram', `telegram:${chatId}`);
+        await sendTelegramMessage(token, chatId, `❌ Missão rejeitada.\n<code>${id}</code>`, withKeyboard);
+      } catch (e: any) {
+        await sendTelegramMessage(token, chatId, `Erro: ${e.message}`, withKeyboard);
+      }
+      return NextResponse.json({ ok: true });
+    }
 
+    if (text.startsWith('/task ')) {
+      const id = text.replace('/task ', '').trim();
+      const mission = await getMission(id);
+      if (!mission) {
+        await sendTelegramMessage(token, chatId, 'Task não encontrada', withKeyboard);
+      } else {
+        const lines = [
+          `<b>${mission.task.title}</b>`,
+          `status: ${mission.task.status} · step ${mission.task.current_step}`,
+          '',
+          ...mission.steps.map(
+            (s: any) =>
+              `${s.step_index}. ${s.agent_name || s.role} — <b>${s.status}</b>${s.requires_approval ? ' (gate)' : ''}`
+          ),
+        ];
+        await sendTelegramMessage(token, chatId, lines.join('\n'), withKeyboard);
+      }
+      return NextResponse.json({ ok: true });
+    }
+
+    if (visionNote && !text) {
+      await sendTelegramMessage(token, chatId, visionNote, withKeyboard);
+      await sql`INSERT INTO agent_dispatch_messages (from_agent_id, content, type) VALUES (${agent.id}, ${visionNote}, 'response')`;
+      return NextResponse.json({ ok: true });
+    }
+
+    let userText = text || '(sem texto)';
+    if (visionNote) userText = `${text}\n\n[Imagem]\n${visionNote}`;
+
+    let reply = 'Recebi no Aegis.';
     try {
       const fleetRows = await sql`SELECT name, status FROM agents ORDER BY name LIMIT 20`;
       const fleetHint = fleetRows.map((a: any) => `${a.name}:${a.status}`).join(', ');
-
-      const recent = await sql`
-        SELECT content, type FROM agent_dispatch_messages
-        WHERE from_agent_id = ${agent.id}
-        ORDER BY created_at DESC LIMIT 12
-      `;
-      const history: Array<{ role: 'user' | 'assistant'; content: string }> = [];
-      for (const row of [...recent].reverse()) {
-        try {
-          if (row.type === 'request') {
-            const parsed = typeof row.content === 'string' ? JSON.parse(row.content) : row.content;
-            if (parsed?.text && String(parsed.chat_id) === chatId) {
-              history.push({ role: 'user', content: String(parsed.text) });
-            }
-          } else if (row.type === 'response' && typeof row.content === 'string') {
-            history.push({ role: 'assistant', content: row.content });
-          }
-        } catch {
-          /* skip */
-        }
-      }
-      const hist = history.slice(0, -1).slice(-8);
-
-      const brain = await jarvisReply({
-        userText,
-        history: hist,
-        fleetHint,
-      });
+      const brain = await jarvisReply({ userText, fleetHint });
       if (brain?.text) reply = brain.text;
     } catch (e: any) {
-      console.error('[jarvis-brain]', e);
-      reply = visionNote
-        ? visionNote
-        : `Tive um problema ao pensar nisso: ${e.message || 'erro'}.`;
+      reply = visionNote || `Erro: ${e.message}`;
     }
 
     await sendTelegramMessage(token, chatId, reply, withKeyboard);
-    await sql`
-      INSERT INTO agent_dispatch_messages (from_agent_id, content, type)
-      VALUES (${agent.id}, ${reply}, 'response')
-    `;
-
+    await sql`INSERT INTO agent_dispatch_messages (from_agent_id, content, type) VALUES (${agent.id}, ${reply}, 'response')`;
     return NextResponse.json({ ok: true });
   } catch (error: any) {
     console.error('[telegram webhook]', error);
@@ -286,6 +305,6 @@ export async function POST(request: Request) {
 export async function GET() {
   return NextResponse.json({
     service: 'aegis-telegram-gateway',
-    features: ['chat', 'vision', 'resumo', 'pending', 'fleet-notify'],
+    features: ['missions', 'approve', 'vision', 'dispatcher'],
   });
 }
