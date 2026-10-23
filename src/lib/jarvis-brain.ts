@@ -43,13 +43,33 @@ Se perguntarem quem você é: Jarvis Comando, hub Telegram do Aegis SOC.`;
 
 type ChatMsg = { role: 'system' | 'user' | 'assistant'; content: string };
 
+/** Groq model ids change; try several until one works. */
+const GROQ_MODEL_CANDIDATES = [
+  process.env.JARVIS_MODEL,
+  'llama-3.3-70b-versatile',
+  'llama-3.1-70b-versatile',
+  'llama-3.1-8b-instant',
+  'meta-llama/llama-4-scout-17b-16e-instruct',
+  'openai/gpt-oss-120b',
+  'gemma2-9b-it',
+].filter(Boolean) as string[];
+
+const OPENROUTER_MODEL_CANDIDATES = [
+  process.env.JARVIS_MODEL,
+  'meta-llama/llama-3.3-70b-instruct',
+  'meta-llama/llama-3.1-70b-instruct',
+  'google/gemini-2.5-flash',
+  'openai/gpt-4o-mini',
+].filter(Boolean) as string[];
+
 function providerConfig() {
   const groq = process.env.GROQ_API_KEY;
   if (groq) {
     return {
       url: 'https://api.groq.com/openai/v1/chat/completions',
       key: groq,
-      model: process.env.JARVIS_MODEL || 'llama-3.3-70b-versatile',
+      models: GROQ_MODEL_CANDIDATES,
+      name: 'groq',
     };
   }
   const or = process.env.OPENROUTER_API_KEY;
@@ -57,10 +77,54 @@ function providerConfig() {
     return {
       url: 'https://openrouter.ai/api/v1/chat/completions',
       key: or,
-      model: process.env.JARVIS_MODEL || 'meta-llama/llama-3.3-70b-instruct',
+      models: OPENROUTER_MODEL_CANDIDATES,
+      name: 'openrouter',
     };
   }
   return null;
+}
+
+async function callChat(
+  url: string,
+  key: string,
+  model: string,
+  messages: ChatMsg[]
+) {
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${key}`,
+      'HTTP-Referer': process.env.AEGIS_PUBLIC_URL || 'https://aegis-control-sand.vercel.app',
+      'X-Title': 'Aegis Jarvis Comando',
+    },
+    body: JSON.stringify({
+      model,
+      messages,
+      temperature: 0.7,
+      max_tokens: 800,
+    }),
+  });
+
+  const bodyText = await res.text();
+  let data: any;
+  try {
+    data = JSON.parse(bodyText);
+  } catch {
+    throw new Error(`LLM ${res.status}: ${bodyText.slice(0, 200)}`);
+  }
+
+  if (!res.ok) {
+    const msg = data?.error?.message || bodyText.slice(0, 200);
+    const err = new Error(`LLM ${res.status}: ${msg}`) as Error & { status?: number; code?: string };
+    err.status = res.status;
+    err.code = data?.error?.code;
+    throw err;
+  }
+
+  const text = data.choices?.[0]?.message?.content?.trim();
+  if (!text) throw new Error('LLM empty response');
+  return { text: text.slice(0, 3500), model };
 }
 
 export async function jarvisReply(opts: {
@@ -87,29 +151,24 @@ export async function jarvisReply(opts: {
   }
   messages.push({ role: 'user', content: opts.userText.slice(0, 4000) });
 
-  const res = await fetch(cfg.url, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${cfg.key}`,
-      'HTTP-Referer': process.env.AEGIS_PUBLIC_URL || 'https://aegis-control-sand.vercel.app',
-      'X-Title': 'Aegis Jarvis Comando',
-    },
-    body: JSON.stringify({
-      model: cfg.model,
-      messages,
-      temperature: 0.7,
-      max_tokens: 800,
-    }),
-  });
-
-  if (!res.ok) {
-    const err = await res.text();
-    throw new Error(`LLM ${res.status}: ${err.slice(0, 300)}`);
+  let lastError: Error | null = null;
+  for (const model of cfg.models) {
+    try {
+      return await callChat(cfg.url, cfg.key, model, messages);
+    } catch (e: any) {
+      lastError = e;
+      // try next model on 404 / model_not_found
+      const msg = String(e?.message || '');
+      if (
+        e?.status === 404
+        || e?.code === 'model_not_found'
+        || /model_not_found|does not exist|not have access/i.test(msg)
+      ) {
+        continue;
+      }
+      throw e;
+    }
   }
 
-  const data = await res.json();
-  const text = data.choices?.[0]?.message?.content?.trim();
-  if (!text) return null;
-  return { text: text.slice(0, 3500), model: cfg.model };
+  throw lastError || new Error('Nenhum modelo LLM disponível');
 }
