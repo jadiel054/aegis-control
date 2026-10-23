@@ -11,7 +11,7 @@ import {
   Activity,
   ShieldAlert,
   FlaskConical,
-  Bot,
+  Settings2,
   LogOut,
   Menu,
   X,
@@ -47,7 +47,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
 
   const navItems = [
     { name: 'Visão Geral', path: '/', icon: LayoutDashboard },
-    { name: 'Agentes · Telegram', path: '/agents', icon: Bot },
+    { name: 'Config. Agentes', path: '/agents', icon: Settings2 },
     { name: 'Quadro de Tarefas', path: '/tasks', icon: KanbanSquare },
     { name: 'Painel de Comandos', path: '/commands', icon: Terminal },
     { name: 'Feed em Tempo Real', path: '/messages', icon: Activity },
