@@ -1,5 +1,34 @@
 import { NextResponse } from 'next/server';
-import { supabase } from '@/lib/supabaseClient';
+import { getSql } from '@/lib/db';
+
+export async function GET(request: Request) {
+  try {
+    const { searchParams } = new URL(request.url);
+    const agentId = searchParams.get('agent_id');
+    const status = searchParams.get('status');
+    const sql = getSql();
+
+    let rows;
+    if (agentId && status) {
+      rows = await sql`
+        SELECT * FROM commands
+        WHERE agent_id = ${agentId} AND status = ${status}
+        ORDER BY created_at DESC LIMIT 50
+      `;
+    } else if (agentId) {
+      rows = await sql`
+        SELECT * FROM commands WHERE agent_id = ${agentId}
+        ORDER BY created_at DESC LIMIT 50
+      `;
+    } else {
+      rows = await sql`SELECT * FROM commands ORDER BY created_at DESC LIMIT 50`;
+    }
+
+    return NextResponse.json({ commands: rows });
+  } catch (error: any) {
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+}
 
 export async function POST(request: Request) {
   try {
@@ -13,68 +42,40 @@ export async function POST(request: Request) {
       );
     }
 
-    // 1. Get agent's webhook_url
-    const { data: agent, error: agentError } = await supabase
-      .from('agents')
-      .select('webhook_url, name')
-      .eq('id', agent_id)
-      .single();
+    const sql = getSql();
 
-    if (agentError || !agent) {
-      return NextResponse.json(
-        { error: 'Agent not found or has no valid information' },
-        { status: 404 }
-      );
+    const agents = await sql`SELECT id, name, webhook_url FROM agents WHERE id = ${agent_id} LIMIT 1`;
+    const agent = agents[0];
+    if (!agent) {
+      return NextResponse.json({ error: 'Agent not found' }, { status: 404 });
     }
 
-    // 2. Insert command in DB with pending status
-    const { data: command, error: commandInsertError } = await supabase
-      .from('commands')
-      .insert({
-        agent_id,
-        command_type,
-        payload,
-        status: 'pending',
-        issued_by,
-      })
-      .select()
-      .single();
-
-    if (commandInsertError || !command) {
-      return NextResponse.json(
-        { error: 'Failed to record command', details: commandInsertError?.message },
-        { status: 500 }
-      );
-    }
+    const inserted = await sql`
+      INSERT INTO commands (agent_id, command_type, payload, status, issued_by)
+      VALUES (${agent_id}, ${command_type}, ${JSON.stringify(payload)}::jsonb, 'pending', ${issued_by})
+      RETURNING *
+    `;
+    const command = inserted[0];
 
     if (!agent.webhook_url) {
-      // Update command as failed since there is no webhook
-      const { data: failedCommand } = await supabase
-        .from('commands')
-        .update({ status: 'failed', executed_at: new Date().toISOString() })
-        .eq('id', command.id)
-        .select()
-        .single();
-
+      const failed = await sql`
+        UPDATE commands SET status = 'failed', executed_at = NOW()
+        WHERE id = ${command.id} RETURNING *
+      `;
       return NextResponse.json(
-        { error: 'Agent has no webhook_url configured', command: failedCommand },
+        { error: 'Agent has no webhook_url configured', command: failed[0] },
         { status: 400 }
       );
     }
 
-    // 3. Dispatch webhook in background or with timeout
-    let finalStatus = 'sent';
-    let executedAt = new Date().toISOString();
-
+    let finalStatus: 'sent' | 'acknowledged' | 'failed' = 'sent';
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 4000); // 4 seconds timeout
+      const timeoutId = setTimeout(() => controller.abort(), 4000);
 
       const response = await fetch(agent.webhook_url, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           command_id: command.id,
           command_type,
@@ -85,43 +86,29 @@ export async function POST(request: Request) {
       });
 
       clearTimeout(timeoutId);
-
-      if (response.ok) {
-        finalStatus = 'acknowledged';
-      } else {
-        finalStatus = 'failed';
-      }
+      finalStatus = response.ok ? 'acknowledged' : 'failed';
     } catch (fetchErr: any) {
       console.warn(`Webhook failed for agent ${agent.name}:`, fetchErr.message);
       finalStatus = 'failed';
     }
 
-    // 4. Update command with execution status
-    const { data: updatedCommand, error: updateError } = await supabase
-      .from('commands')
-      .update({
-        status: finalStatus,
-        executed_at: executedAt,
-      })
-      .eq('id', command.id)
-      .select()
-      .single();
+    const updated = await sql`
+      UPDATE commands
+      SET status = ${finalStatus}, executed_at = NOW()
+      WHERE id = ${command.id}
+      RETURNING *
+    `;
 
-    if (updateError) {
-      return NextResponse.json(
-        { error: 'Failed to update final command status', details: updateError.message },
-        { status: 500 }
-      );
-    }
+    await sql`
+      INSERT INTO agent_dispatch_messages (from_agent_id, content, type)
+      VALUES (
+        ${agent_id},
+        ${`Received command: ${String(command_type).toUpperCase()} (issued by ${issued_by}). Status: ${finalStatus.toUpperCase()}`},
+        ${finalStatus === 'failed' ? 'error' : 'log'}
+      )
+    `;
 
-    // Create a message in log format too to show command trigger in log feed
-    await supabase.from('agent_dispatch_messages').insert({
-      from_agent_id: agent_id,
-      content: `Received command: ${command_type.toUpperCase()} (issued by ${issued_by}). Status: ${finalStatus.toUpperCase()}`,
-      type: finalStatus === 'failed' ? 'error' : 'log',
-    });
-
-    return NextResponse.json({ success: true, command: updatedCommand });
+    return NextResponse.json({ success: true, command: updated[0] });
   } catch (error: any) {
     return NextResponse.json(
       { error: 'Internal Server Error', details: error.message },

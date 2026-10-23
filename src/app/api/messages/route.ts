@@ -1,5 +1,28 @@
 import { NextResponse } from 'next/server';
-import { supabase } from '@/lib/supabaseClient';
+import { getSql } from '@/lib/db';
+
+export async function GET(request: Request) {
+  try {
+    const { searchParams } = new URL(request.url);
+    const limit = Math.min(Number(searchParams.get('limit') || 100), 500);
+    const sql = getSql();
+
+    const messages = await sql`
+      SELECT m.*,
+             fa.name AS from_agent_name,
+             ta.name AS to_agent_name
+      FROM agent_dispatch_messages m
+      LEFT JOIN agents fa ON fa.id = m.from_agent_id
+      LEFT JOIN agents ta ON ta.id = m.to_agent_id
+      ORDER BY m.created_at DESC
+      LIMIT ${limit}
+    `;
+
+    return NextResponse.json({ messages });
+  } catch (error: any) {
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+}
 
 export async function POST(request: Request) {
   try {
@@ -11,70 +34,42 @@ export async function POST(request: Request) {
       to_agent_name,
       task_id,
       content,
-      type, // 'request' | 'response' | 'log' | 'error'
+      type,
     } = body;
 
     if (!content || !type) {
       return NextResponse.json(
-        { error: 'Missing content or type in request body' },
+        { error: 'Missing content or type' },
         { status: 400 }
       );
     }
 
-    // Resolve from_agent_id if only from_agent_name is provided
-    if (!from_agent_id && from_agent_name) {
-      const { data, error } = await supabase
-        .from('agents')
-        .select('id')
-        .ilike('name', from_agent_name)
-        .single();
+    const sql = getSql();
 
-      if (!error && data) {
-        from_agent_id = data.id;
-      }
+    if (!from_agent_id && from_agent_name) {
+      const rows = await sql`SELECT id FROM agents WHERE LOWER(name) = LOWER(${from_agent_name}) LIMIT 1`;
+      if (rows[0]) from_agent_id = rows[0].id;
     }
 
-    // Resolve to_agent_id if only to_agent_name is provided
     if (!to_agent_id && to_agent_name) {
-      const { data, error } = await supabase
-        .from('agents')
-        .select('id')
-        .ilike('name', to_agent_name)
-        .single();
-
-      if (!error && data) {
-        to_agent_id = data.id;
-      }
+      const rows = await sql`SELECT id FROM agents WHERE LOWER(name) = LOWER(${to_agent_name}) LIMIT 1`;
+      if (rows[0]) to_agent_id = rows[0].id;
     }
 
     if (!from_agent_id) {
       return NextResponse.json(
-        { error: 'Could not resolve from_agent_id (provide from_agent_id or from_agent_name)' },
+        { error: 'Could not resolve from_agent_id' },
         { status: 400 }
       );
     }
 
-    // Insert message
-    const { data: insertedMessage, error: insertError } = await supabase
-      .from('agent_dispatch_messages')
-      .insert({
-        from_agent_id,
-        to_agent_id: to_agent_id || null,
-        task_id: task_id || null,
-        content,
-        type,
-      })
-      .select()
-      .single();
+    const inserted = await sql`
+      INSERT INTO agent_dispatch_messages (from_agent_id, to_agent_id, task_id, content, type)
+      VALUES (${from_agent_id}, ${to_agent_id || null}, ${task_id || null}, ${content}, ${type})
+      RETURNING *
+    `;
 
-    if (insertError) {
-      return NextResponse.json(
-        { error: 'Failed to record message', details: insertError.message },
-        { status: 500 }
-      );
-    }
-
-    return NextResponse.json({ success: true, message: insertedMessage });
+    return NextResponse.json({ success: true, message: inserted[0] });
   } catch (error: any) {
     return NextResponse.json(
       { error: 'Internal Server Error', details: error.message },

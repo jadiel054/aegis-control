@@ -1,13 +1,29 @@
 import { NextResponse } from 'next/server';
-import { supabase } from '@/lib/supabaseClient';
+import { getSql } from '@/lib/db';
+
+export async function GET() {
+  try {
+    const sql = getSql();
+    const tasks = await sql`
+      SELECT t.*, a.name AS assigned_agent_name
+      FROM tasks t
+      LEFT JOIN agents a ON a.id = t.assigned_agent_id
+      ORDER BY t.created_at DESC
+      LIMIT 200
+    `;
+    return NextResponse.json({ tasks });
+  } catch (error: any) {
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+}
 
 export async function POST(request: Request) {
   try {
     const body = await request.json();
     const {
       title,
-      description,
-      assigned_agent_id,
+      description = null,
+      assigned_agent_id = null,
       status = 'pending',
       priority = 'medium',
       created_by = 'system',
@@ -17,25 +33,18 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Missing field: title' }, { status: 400 });
     }
 
-    const { data: task, error } = await supabase
-      .from('tasks')
-      .insert({
-        title,
-        description,
-        assigned_agent_id: assigned_agent_id || null,
-        status,
-        priority,
-        created_by,
-      })
-      .select()
-      .single();
+    const sql = getSql();
+    const rows = await sql`
+      INSERT INTO tasks (title, description, assigned_agent_id, status, priority, created_by)
+      VALUES (${title}, ${description}, ${assigned_agent_id}, ${status}, ${priority}, ${created_by})
+      RETURNING *
+    `;
 
-    if (error) {
-      return NextResponse.json({ error: 'Failed to create task', details: error.message }, { status: 500 });
-    }
-
-    return NextResponse.json({ success: true, task });
+    return NextResponse.json({ success: true, task: rows[0] });
   } catch (error: any) {
-    return NextResponse.json({ error: 'Internal Server Error', details: error.message }, { status: 500 });
+    return NextResponse.json(
+      { error: 'Internal Server Error', details: error.message },
+      { status: 500 }
+    );
   }
 }
