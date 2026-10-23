@@ -15,7 +15,8 @@ export async function describeImage(opts: {
 
   const googleKey = process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY;
   if (googleKey) {
-    const model = process.env.VISION_MODEL || 'gemini-2.5-flash';
+    // Google retirou 2.5-flash para contas novas → 3.8-flash
+    const model = process.env.VISION_MODEL || 'gemini-3.8-flash';
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${googleKey}`;
     const res = await fetch(url, {
       method: 'POST',
