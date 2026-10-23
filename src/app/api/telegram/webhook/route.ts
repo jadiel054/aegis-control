@@ -1,9 +1,11 @@
 import { NextResponse } from 'next/server';
 import { getSql } from '@/lib/db';
+import { jarvisReply } from '@/lib/jarvis-brain';
 import { quickReplyKeyboard, sendTelegramMessage } from '@/lib/telegram';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
+export const maxDuration = 60;
 
 export async function POST(request: Request) {
   try {
@@ -32,8 +34,7 @@ export async function POST(request: Request) {
 
     const sql = getSql();
     const agents = await sql`
-      SELECT * FROM agents
-      WHERE LOWER(name) = LOWER(${agentName}) LIMIT 1
+      SELECT * FROM agents WHERE LOWER(name) = LOWER(${agentName}) LIMIT 1
     `;
     const agent = agents[0];
     if (!agent) {
@@ -48,7 +49,7 @@ export async function POST(request: Request) {
         await sendTelegramMessage(
           agent.telegram_bot_token,
           chatId,
-          '⛔ Chat não autorizado neste bot. Peça ao operador para liberar seu chat_id no Aegis.'
+          '⛔ Chat não autorizado neste bot.'
         ).catch(() => {});
       }
       return NextResponse.json({ ok: true, denied: true });
@@ -71,7 +72,7 @@ export async function POST(request: Request) {
     `;
 
     if (!agent.telegram_bot_token) {
-      return NextResponse.json({ ok: true, warning: 'no token configured' });
+      return NextResponse.json({ ok: true, warning: 'no token' });
     }
 
     const token = agent.telegram_bot_token as string;
@@ -84,17 +85,14 @@ export async function POST(request: Request) {
         [
           `<b>Aegis · ${agent.name}</b>`,
           '',
-          'Hub Telegram do fleet (estilo Manus).',
+          'Hub do fleet — conversa natural + status.',
           '',
-          'Toque nos botões abaixo ou digite:',
-          '/start — início + teclado',
-          '/status — status do fleet',
+          'Comandos rápidos:',
+          '/status — fleet',
           '/id — seu chat_id',
-          '/help — esta ajuda',
+          '/help — ajuda',
           '',
-          'Texto livre: registra no Aegis e responde.',
-          '',
-          `<i>chat_id: <code>${chatId}</code></i>`,
+          'Ou escreva em linguagem normal: eu respondo, pergunto e oriento os próximos passos.',
         ].join('\n'),
         withKeyboard
       );
@@ -105,7 +103,7 @@ export async function POST(request: Request) {
       await sendTelegramMessage(
         token,
         chatId,
-        `Seu chat_id: <code>${chatId}</code>\nJá está liberado se aparecer no painel Aegis.`,
+        `Seu chat_id: <code>${chatId}</code>`,
         withKeyboard
       );
       return NextResponse.json({ ok: true });
@@ -113,8 +111,7 @@ export async function POST(request: Request) {
 
     if (text === '/status') {
       const onlineAgents = await sql`
-        SELECT name, status, last_heartbeat FROM agents
-        ORDER BY name LIMIT 30
+        SELECT name, status, last_heartbeat FROM agents ORDER BY name LIMIT 30
       `;
       const lines = onlineAgents.map(
         (a: any) =>
@@ -129,40 +126,52 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: true });
     }
 
+    // Conversational path
     let reply =
-      `✅ Recebido no Aegis (${agent.name}).\n` +
-      `Mensagem registrada no feed.\n` +
-      `<i>${text.slice(0, 200) || '(sem texto)'}</i>`;
+      'Recebi sua mensagem no Aegis. Para eu responder com IA, o operador precisa configurar GROQ_API_KEY (ou OPENROUTER_API_KEY) no Vercel do Aegis.';
 
-    const morpheusUrl = process.env.MORPHEUS_API_URL;
-    if (morpheusUrl && text && !text.startsWith('/')) {
-      try {
-        const mr = await fetch(`${morpheusUrl.replace(/\/$/, '')}/api/chat`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...(process.env.MORPHEUS_API_KEY
-              ? { Authorization: `Bearer ${process.env.MORPHEUS_API_KEY}` }
-              : {}),
-          },
-          body: JSON.stringify({
-            message: text,
-            source: 'telegram',
-            agent: agent.name,
-            chat_id: chatId,
-          }),
-        });
-        if (mr.ok) {
-          const data = await mr.json();
-          const answer =
-            data.reply || data.message || data.content || data.response;
-          if (answer && typeof answer === 'string') {
-            reply = answer.slice(0, 3500);
+    try {
+      const fleetRows = await sql`
+        SELECT name, status FROM agents ORDER BY name LIMIT 20
+      `;
+      const fleetHint = fleetRows
+        .map((a: any) => `${a.name}:${a.status}`)
+        .join(', ');
+
+      // Recent context for this chat (best-effort from last messages)
+      const recent = await sql`
+        SELECT content, type FROM agent_dispatch_messages
+        WHERE from_agent_id = ${agent.id}
+        ORDER BY created_at DESC
+        LIMIT 12
+      `;
+      const history: Array<{ role: 'user' | 'assistant'; content: string }> = [];
+      for (const row of [...recent].reverse()) {
+        try {
+          if (row.type === 'request') {
+            const parsed = typeof row.content === 'string' ? JSON.parse(row.content) : row.content;
+            if (parsed?.text && String(parsed.chat_id) === chatId) {
+              history.push({ role: 'user', content: String(parsed.text) });
+            }
+          } else if (row.type === 'response' && typeof row.content === 'string') {
+            history.push({ role: 'assistant', content: row.content });
           }
+        } catch {
+          /* skip */
         }
-      } catch {
-        // keep local ack
       }
+      // drop the message we just inserted (last user) to avoid dup — jarvisReply adds userText
+      const hist = history.slice(0, -1).slice(-8);
+
+      const brain = await jarvisReply({
+        userText: text || '(sem texto)',
+        history: hist,
+        fleetHint,
+      });
+      if (brain?.text) reply = brain.text;
+    } catch (e: any) {
+      console.error('[jarvis-brain]', e);
+      reply = `Tive um problema ao pensar nisso: ${e.message || 'erro'}. Tente de novo em instantes.`;
     }
 
     await sendTelegramMessage(token, chatId, reply, withKeyboard);
@@ -180,8 +189,5 @@ export async function POST(request: Request) {
 }
 
 export async function GET() {
-  return NextResponse.json({
-    service: 'aegis-telegram-gateway',
-    usage: 'POST webhook from Telegram; configure via /api/telegram/setup',
-  });
+  return NextResponse.json({ service: 'aegis-telegram-gateway', brain: 'jarvis-brain' });
 }
