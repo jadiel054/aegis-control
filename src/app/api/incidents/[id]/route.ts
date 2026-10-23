@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { supabase } from '@/lib/supabaseClient';
+import { getSql } from '@/lib/db';
 
 export async function PATCH(
   request: Request,
@@ -8,37 +8,47 @@ export async function PATCH(
   try {
     const { id } = params;
     const body = await request.json();
-
     const { severity, title, description, status, resolution_notes } = body;
 
-    const updatePayload: any = {};
-    if (severity !== undefined) updatePayload.severity = severity;
-    if (title !== undefined) updatePayload.title = title;
-    if (description !== undefined) updatePayload.description = description;
-    if (status !== undefined) {
-      updatePayload.status = status;
-      if (status === 'resolved') {
-        updatePayload.resolved_at = new Date().toISOString();
-      } else {
-        // If moved back from resolved, clear resolved_at
-        updatePayload.resolved_at = null;
-      }
-    }
-    if (resolution_notes !== undefined) updatePayload.resolution_notes = resolution_notes;
+    const sql = getSql();
 
-    const { data: incident, error } = await supabase
-      .from('security_incidents')
-      .update(updatePayload)
-      .eq('id', id)
-      .select()
-      .single();
-
-    if (error) {
-      return NextResponse.json({ error: 'Failed to update security incident', details: error.message }, { status: 500 });
+    // Read current row then apply partial update via COALESCE pattern
+    const current = await sql`SELECT * FROM security_incidents WHERE id = ${id} LIMIT 1`;
+    if (!current[0]) {
+      return NextResponse.json({ error: 'Incident not found' }, { status: 404 });
     }
 
-    return NextResponse.json({ success: true, incident });
+    const nextSeverity = severity !== undefined ? severity : current[0].severity;
+    const nextTitle = title !== undefined ? title : current[0].title;
+    const nextDescription = description !== undefined ? description : current[0].description;
+    const nextStatus = status !== undefined ? status : current[0].status;
+    const nextNotes =
+      resolution_notes !== undefined ? resolution_notes : current[0].resolution_notes;
+    const resolvedAt =
+      nextStatus === 'resolved'
+        ? new Date().toISOString()
+        : status !== undefined
+          ? null
+          : current[0].resolved_at;
+
+    const rows = await sql`
+      UPDATE security_incidents
+      SET
+        severity = ${nextSeverity},
+        title = ${nextTitle},
+        description = ${nextDescription},
+        status = ${nextStatus},
+        resolution_notes = ${nextNotes},
+        resolved_at = ${resolvedAt}
+      WHERE id = ${id}
+      RETURNING *
+    `;
+
+    return NextResponse.json({ success: true, incident: rows[0] });
   } catch (error: any) {
-    return NextResponse.json({ error: 'Internal Server Error', details: error.message }, { status: 500 });
+    return NextResponse.json(
+      { error: 'Internal Server Error', details: error.message },
+      { status: 500 }
+    );
   }
 }
