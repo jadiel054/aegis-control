@@ -11,6 +11,7 @@ import {
   Activity,
   ShieldAlert,
   FlaskConical,
+  Bot,
   LogOut,
   Menu,
   X,
@@ -26,7 +27,6 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
   const pathname = usePathname();
   const router = useRouter();
   const [operatorEmail, setOperatorEmail] = useState('operator@aegis.internal');
-  // Closed by default — only opens when user taps the hamburger (mobile)
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [pulseState, setPulseState] = useState(true);
 
@@ -36,7 +36,6 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
     return () => clearInterval(interval);
   }, []);
 
-  // Close drawer whenever the route changes (mobile UX)
   useEffect(() => {
     setSidebarOpen(false);
   }, [pathname]);
@@ -48,6 +47,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
 
   const navItems = [
     { name: 'Visão Geral', path: '/', icon: LayoutDashboard },
+    { name: 'Agentes · Telegram', path: '/agents', icon: Bot },
     { name: 'Quadro de Tarefas', path: '/tasks', icon: KanbanSquare },
     { name: 'Painel de Comandos', path: '/commands', icon: Terminal },
     { name: 'Feed em Tempo Real', path: '/messages', icon: Activity },
@@ -60,7 +60,6 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
       <div className="flex h-screen bg-[#05070C] text-[#F3F4F6] font-mono overflow-hidden">
         <div className="absolute inset-0 bg-[linear-gradient(to_right,#090d16_1px,transparent_1px),linear-gradient(to_bottom,#090d16_1px,transparent_1px)] bg-[size:4rem_4rem] pointer-events-none opacity-40" />
 
-        {/* Mobile backdrop — tap outside to close */}
         {sidebarOpen && (
           <button
             type="button"
