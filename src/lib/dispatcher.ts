@@ -1,7 +1,6 @@
 import { getSql } from '@/lib/db';
 import { notifyOperatorTelegram } from '@/lib/fleet-notify';
 
-/** Default pipeline roles — not every agent, only specialists needed */
 export const DEFAULT_PIPELINE = [
   { role: 'orchestrator', agentHint: 'Morpheus', requires_approval: false },
   { role: 'worker', agentHint: 'Plutao', requires_approval: true },
@@ -15,6 +14,8 @@ export type CreateMissionInput = {
   created_by?: string;
   priority?: string;
   pipeline?: Array<{ role: string; agentHint?: string; requires_approval?: boolean }>;
+  /** If true (default for telegram), kick executor after create */
+  autoRun?: boolean;
 };
 
 async function resolveAgent(hint: string | undefined, role: string) {
@@ -32,6 +33,19 @@ async function resolveAgent(hint: string | undefined, role: string) {
     LIMIT 1
   `;
   return byRole[0] || null;
+}
+
+export async function listSteps(taskId: string) {
+  const sql = getSql();
+  return sql`SELECT * FROM task_steps WHERE task_id = ${taskId} ORDER BY step_index`;
+}
+
+export async function getMission(taskId: string) {
+  const sql = getSql();
+  const tasks = await sql`SELECT * FROM tasks WHERE id = ${taskId} LIMIT 1`;
+  if (!tasks[0]) return null;
+  const steps = await listSteps(taskId);
+  return { task: tasks[0], steps };
 }
 
 export async function createMission(input: CreateMissionInput) {
@@ -79,7 +93,6 @@ export async function createMission(input: CreateMissionInput) {
     `;
   }
 
-  // Assign first agent on task
   const first = await sql`
     SELECT * FROM task_steps WHERE task_id = ${task.id} AND step_index = 0 LIMIT 1
   `;
@@ -98,23 +111,9 @@ export async function createMission(input: CreateMissionInput) {
     taskId: task.id,
   }).catch(() => {});
 
-  return { task, steps: await listSteps(task.id) };
+  return { task, steps: await listSteps(task.id), autoRun: input.autoRun !== false };
 }
 
-export async function listSteps(taskId: string) {
-  const sql = getSql();
-  return sql`SELECT * FROM task_steps WHERE task_id = ${taskId} ORDER BY step_index`;
-}
-
-export async function getMission(taskId: string) {
-  const sql = getSql();
-  const tasks = await sql`SELECT * FROM tasks WHERE id = ${taskId} LIMIT 1`;
-  if (!tasks[0]) return null;
-  const steps = await listSteps(taskId);
-  return { task: tasks[0], steps };
-}
-
-/** Agent reports output for current step; optionally advance */
 export async function completeStep(opts: {
   taskId: string;
   stepIndex?: number;
@@ -130,17 +129,20 @@ export async function completeStep(opts: {
   if (!step) throw new Error('Step not found');
 
   if (step.requires_approval && step.status !== 'approved' && step.status !== 'running') {
-    await sql`
-      UPDATE task_steps SET status = 'awaiting_approval', output = ${opts.output}, started_at = COALESCE(started_at, NOW())
-      WHERE id = ${step.id}
-    `;
-    await notifyOperatorTelegram({
-      kind: 'need_confirm',
-      agentName: step.agent_name || opts.agentName,
-      title: 'Aprovação necessária',
-      detail: `Tarefa: ${mission.task.title}\nPasso ${idx} (${step.role})\n\n${opts.output.slice(0, 800)}\n\nResponda: /approve ${opts.taskId} ou /reject ${opts.taskId}`,
-      taskId: opts.taskId,
-    }).catch(() => {});
+    // First time hitting a gated step: park for operator
+    if (step.status !== 'awaiting_approval') {
+      await sql`
+        UPDATE task_steps SET status = 'awaiting_approval', output = ${opts.output}, started_at = COALESCE(started_at, NOW())
+        WHERE id = ${step.id}
+      `;
+      await notifyOperatorTelegram({
+        kind: 'need_confirm',
+        agentName: step.agent_name || opts.agentName,
+        title: 'Aprovação necessária',
+        detail: `Tarefa: ${mission.task.title}\nPasso ${idx} (${step.role})\n\n${opts.output.slice(0, 800)}\n\n<code>/approve ${opts.taskId}</code>\n<code>/reject ${opts.taskId}</code>`,
+        taskId: opts.taskId,
+      }).catch(() => {});
+    }
     return { status: 'awaiting_approval', mission: await getMission(opts.taskId) };
   }
 
@@ -167,7 +169,6 @@ export async function completeStep(opts: {
     return { status: 'done', mission: await getMission(opts.taskId) };
   }
 
-  // Handoff: pass previous output as next input
   await sql`
     UPDATE task_steps SET status = 'ready', input = ${opts.output}, started_at = NOW()
     WHERE id = ${next.id}
@@ -201,7 +202,6 @@ export async function approveStep(taskId: string, approvedBy: string) {
     WHERE id = ${step.id}
   `;
 
-  // Complete with existing output to advance pipeline
   return completeStep({
     taskId,
     stepIndex: idx,
