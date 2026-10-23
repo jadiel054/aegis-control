@@ -1,4 +1,5 @@
 import { getSql } from '@/lib/db';
+import { deliverMissionAudit } from '@/lib/audit-report';
 import { notifyOperatorTelegram } from '@/lib/fleet-notify';
 
 export const DEFAULT_PIPELINE = [
@@ -14,7 +15,6 @@ export type CreateMissionInput = {
   created_by?: string;
   priority?: string;
   pipeline?: Array<{ role: string; agentHint?: string; requires_approval?: boolean }>;
-  /** If true (default for telegram), kick executor after create */
   autoRun?: boolean;
 };
 
@@ -129,7 +129,6 @@ export async function completeStep(opts: {
   if (!step) throw new Error('Step not found');
 
   if (step.requires_approval && step.status !== 'approved' && step.status !== 'running') {
-    // First time hitting a gated step: park for operator
     if (step.status !== 'awaiting_approval') {
       await sql`
         UPDATE task_steps SET status = 'awaiting_approval', output = ${opts.output}, started_at = COALESCE(started_at, NOW())
@@ -163,9 +162,15 @@ export async function completeStep(opts: {
       kind: 'completed',
       agentName: 'Aegis Dispatcher',
       title: 'Missão concluída',
-      detail: `${mission.task.title}\n\n${opts.output.slice(0, 1000)}`,
+      detail: `${mission.task.title}\n\n${opts.output.slice(0, 800)}\n\nDocumento de auditoria em seguida…`,
       taskId: opts.taskId,
     }).catch(() => {});
+
+    // Audit pack → Telegram .md
+    await deliverMissionAudit(opts.taskId).catch((e) =>
+      console.error('[audit]', e)
+    );
+
     return { status: 'done', mission: await getMission(opts.taskId) };
   }
 

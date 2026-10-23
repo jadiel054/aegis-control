@@ -47,10 +47,43 @@ export async function sendTelegramMessage(
   return last;
 }
 
+/** Send a file (e.g. audit .md) via multipart */
+export async function sendTelegramDocument(
+  token: string,
+  chatId: string | number,
+  opts: {
+    filename: string;
+    content: string | Buffer;
+    caption?: string;
+    mime?: string;
+  }
+) {
+  const form = new FormData();
+  form.append('chat_id', String(chatId));
+  if (opts.caption) {
+    form.append('caption', opts.caption.slice(0, 1024));
+  }
+  const blob = new Blob(
+    [typeof opts.content === 'string' ? opts.content : new Uint8Array(opts.content)],
+    { type: opts.mime || 'text/markdown; charset=utf-8' }
+  );
+  form.append('document', blob, opts.filename);
+
+  const res = await fetch(`${API}/bot${token}/sendDocument`, {
+    method: 'POST',
+    body: form,
+  });
+  const data = await res.json();
+  if (!data.ok) {
+    throw new Error(data.description || 'sendDocument failed');
+  }
+  return data.result;
+}
+
 export async function sendChatAction(
   token: string,
   chatId: string | number,
-  action: 'typing' | 'upload_photo' = 'typing'
+  action: 'typing' | 'upload_photo' | 'upload_document' = 'typing'
 ) {
   return telegramApi(token, 'sendChatAction', { chat_id: chatId, action });
 }
