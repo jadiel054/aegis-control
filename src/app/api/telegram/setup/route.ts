@@ -5,10 +5,15 @@ import { getTelegramWebhookInfo, setTelegramWebhook } from '@/lib/telegram';
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
+function publicBaseUrl() {
+  if (process.env.AEGIS_PUBLIC_URL) return process.env.AEGIS_PUBLIC_URL.replace(/\/$/, '');
+  if (process.env.VERCEL_URL) return `https://${process.env.VERCEL_URL}`;
+  return 'https://aegis-control-sand.vercel.app';
+}
+
 /**
  * Registers Telegram webhook for an agent that already has telegram_bot_token in Neon.
  * POST { "agent": "Jarvis Comando" }
- * Requires cookie auth is optional for now — protect with SETUP_SECRET if set.
  */
 export async function POST(request: Request) {
   try {
@@ -42,13 +47,7 @@ export async function POST(request: Request) {
       );
     }
 
-    const base =
-      process.env.AEGIS_PUBLIC_URL ||
-      process.env.VERCEL_URL
-        ? `https://${process.env.VERCEL_URL}`
-        : 'https://aegis-control-sand.vercel.app';
-    const publicBase = process.env.AEGIS_PUBLIC_URL || base;
-    const webhookUrl = `${publicBase.replace(/\/$/, '')}/api/telegram/webhook?agent=${encodeURIComponent(agent.name)}`;
+    const webhookUrl = `${publicBaseUrl()}/api/telegram/webhook?agent=${encodeURIComponent(agent.name)}`;
     const secret = process.env.TELEGRAM_WEBHOOK_SECRET;
 
     await setTelegramWebhook(agent.telegram_bot_token, webhookUrl, secret);
