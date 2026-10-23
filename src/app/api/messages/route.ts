@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getSql } from '@/lib/db';
+import { notifyOperatorTelegram } from '@/lib/fleet-notify';
 
 export async function GET(request: Request) {
   try {
@@ -35,13 +36,11 @@ export async function POST(request: Request) {
       task_id,
       content,
       type,
+      notify,
     } = body;
 
     if (!content || !type) {
-      return NextResponse.json(
-        { error: 'Missing content or type' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: 'Missing content or type' }, { status: 400 });
     }
 
     const sql = getSql();
@@ -57,10 +56,7 @@ export async function POST(request: Request) {
     }
 
     if (!from_agent_id) {
-      return NextResponse.json(
-        { error: 'Could not resolve from_agent_id' },
-        { status: 400 }
-      );
+      return NextResponse.json({ error: 'Could not resolve from_agent_id' }, { status: 400 });
     }
 
     const inserted = await sql`
@@ -68,6 +64,23 @@ export async function POST(request: Request) {
       VALUES (${from_agent_id}, ${to_agent_id || null}, ${task_id || null}, ${content}, ${type})
       RETURNING *
     `;
+
+    // Push to Jarvis Comando when agents report progress / errors / need confirm
+    const shouldNotify =
+      notify === true
+      || type === 'error'
+      || (typeof content === 'string' && /need_confirm|awaiting_approval|FAILED|COMPLETED/i.test(content));
+
+    if (shouldNotify) {
+      const nameRows = await sql`SELECT name FROM agents WHERE id = ${from_agent_id} LIMIT 1`;
+      await notifyOperatorTelegram({
+        kind: type === 'error' ? 'failed' : 'log',
+        agentName: nameRows[0]?.name || from_agent_name,
+        title: type === 'error' ? 'Erro no agente' : 'Update do fleet',
+        detail: String(content).slice(0, 1500),
+        taskId: task_id,
+      }).catch(() => {});
+    }
 
     return NextResponse.json({ success: true, message: inserted[0] });
   } catch (error: any) {

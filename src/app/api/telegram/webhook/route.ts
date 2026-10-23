@@ -1,11 +1,24 @@
 import { NextResponse } from 'next/server';
 import { getSql } from '@/lib/db';
 import { jarvisReply } from '@/lib/jarvis-brain';
-import { quickReplyKeyboard, sendTelegramMessage } from '@/lib/telegram';
+import { buildFleetResumo, formatResumoHtml } from '@/lib/fleet-notify';
+import {
+  getTelegramFile,
+  quickReplyKeyboard,
+  sendChatAction,
+  sendTelegramMessage,
+} from '@/lib/telegram';
+import { describeImage } from '@/lib/vision';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 60;
+
+function largestPhoto(message: any): string | null {
+  const photos = message.photo;
+  if (!Array.isArray(photos) || photos.length === 0) return null;
+  return photos[photos.length - 1]?.file_id || null;
+}
 
 export async function POST(request: Request) {
   try {
@@ -27,7 +40,7 @@ export async function POST(request: Request) {
     }
 
     const chatId = String(message.chat.id);
-    const text = (message.text || message.caption || '').trim();
+    let text = (message.text || message.caption || '').trim();
     const from = message.from
       ? `${message.from.first_name || ''} ${message.from.last_name || ''}`.trim()
       : 'unknown';
@@ -55,12 +68,68 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: true, denied: true });
     }
 
+    if (!agent.telegram_bot_token) {
+      return NextResponse.json({ ok: true, warning: 'no token' });
+    }
+
+    const token = agent.telegram_bot_token as string;
+    const withKeyboard = { reply_markup: quickReplyKeyboard() };
+
+    await sendChatAction(token, chatId, 'typing').catch(() => {});
+
+    // --- Media: photo ---
+    const photoId = largestPhoto(message);
+    let visionNote = '';
+    if (photoId) {
+      try {
+        await sendChatAction(token, chatId, 'upload_photo').catch(() => {});
+        const file = await getTelegramFile(token, photoId);
+        if (file.buf.length > 4_500_000) {
+          visionNote = 'Imagem grande demais para análise automática (>~4MB).';
+        } else {
+          const b64 = file.buf.toString('base64');
+          visionNote = await describeImage({
+            imageBase64: b64,
+            mime: file.mime,
+            caption: message.caption,
+          });
+        }
+      } catch (e: any) {
+        visionNote = `Não consegui analisar a imagem: ${e.message}`;
+      }
+    }
+
+    // document image mime
+    if (!photoId && message.document?.mime_type?.startsWith('image/')) {
+      try {
+        const file = await getTelegramFile(token, message.document.file_id);
+        const b64 = file.buf.toString('base64');
+        visionNote = await describeImage({
+          imageBase64: b64,
+          mime: message.document.mime_type,
+          caption: message.caption,
+        });
+      } catch (e: any) {
+        visionNote = `Documento imagem: ${e.message}`;
+      }
+    } else if (message.document && !photoId) {
+      visionNote = `Recebi o arquivo <code>${message.document.file_name || 'documento'}</code> (${message.document.mime_type || 'tipo desconhecido'}). Análise automática de PDF/binário ainda limitada — descreva o que precisa ou envie print.`;
+    }
+
     await sql`
       INSERT INTO agent_dispatch_messages (from_agent_id, to_agent_id, content, type)
       VALUES (
         ${agent.id},
         NULL,
-        ${JSON.stringify({ source: 'telegram', chat_id: chatId, from, text, update_id: update.update_id })},
+        ${JSON.stringify({
+          source: 'telegram',
+          chat_id: chatId,
+          from,
+          text,
+          has_photo: Boolean(photoId),
+          vision_preview: visionNote ? visionNote.slice(0, 500) : null,
+          update_id: update.update_id,
+        })},
         'request'
       )
     `;
@@ -71,13 +140,6 @@ export async function POST(request: Request) {
       WHERE id = ${agent.id}
     `;
 
-    if (!agent.telegram_bot_token) {
-      return NextResponse.json({ ok: true, warning: 'no token' });
-    }
-
-    const token = agent.telegram_bot_token as string;
-    const withKeyboard = { reply_markup: quickReplyKeyboard() };
-
     if (text === '/start' || text.startsWith('/start ') || text === '/help') {
       await sendTelegramMessage(
         token,
@@ -85,14 +147,14 @@ export async function POST(request: Request) {
         [
           `<b>Aegis · ${agent.name}</b>`,
           '',
-          'Hub do fleet — conversa natural + status.',
+          'Hub do fleet: conversa, status, resumos e alertas.',
           '',
-          'Comandos rápidos:',
-          '/status — fleet',
-          '/id — seu chat_id',
-          '/help — ajuda',
+          '/status — agentes',
+          '/resumo — o que rolou (tarefas, pendências, incidentes)',
+          '/pending — aguardando confirmação',
           '',
-          'Ou escreva em linguagem normal: eu respondo, pergunto e oriento os próximos passos.',
+          'Envie <b>print/foto</b> para análise visual (Gemini).',
+          'Agentes podem me notificar em tempo real (progresso, falha, confirmação).',
         ].join('\n'),
         withKeyboard
       );
@@ -100,12 +162,7 @@ export async function POST(request: Request) {
     }
 
     if (text === '/id') {
-      await sendTelegramMessage(
-        token,
-        chatId,
-        `Seu chat_id: <code>${chatId}</code>`,
-        withKeyboard
-      );
+      await sendTelegramMessage(token, chatId, `chat_id: <code>${chatId}</code>`, withKeyboard);
       return NextResponse.json({ ok: true });
     }
 
@@ -126,24 +183,62 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: true });
     }
 
-    // Conversational path
+    if (text === '/resumo') {
+      const data = await buildFleetResumo();
+      await sendTelegramMessage(token, chatId, formatResumoHtml(data), withKeyboard);
+      return NextResponse.json({ ok: true });
+    }
+
+    if (text === '/pending') {
+      const data = await buildFleetResumo();
+      if (!data.pendingCommands.length && !data.openIncidents.length) {
+        await sendTelegramMessage(
+          token,
+          chatId,
+          'Nada pendente de confirmação no momento. ✅',
+          withKeyboard
+        );
+      } else {
+        const lines = ['<b>⏸️ Pendências</b>', ''];
+        for (const c of data.pendingCommands) {
+          lines.push(`• Comando <b>${c.command_type}</b> — ${c.status}`);
+        }
+        for (const i of data.openIncidents) {
+          lines.push(`• Incidente [${i.severity}] ${i.title}`);
+        }
+        lines.push('', 'Quando o write-gate estiver ativo, a aprovação será por aqui / no painel Aegis.');
+        await sendTelegramMessage(token, chatId, lines.join('\n'), withKeyboard);
+      }
+      return NextResponse.json({ ok: true });
+    }
+
+    // Pure vision reply if only photo
+    if (visionNote && !text) {
+      await sendTelegramMessage(token, chatId, visionNote, withKeyboard);
+      await sql`
+        INSERT INTO agent_dispatch_messages (from_agent_id, content, type)
+        VALUES (${agent.id}, ${visionNote}, 'response')
+      `;
+      return NextResponse.json({ ok: true });
+    }
+
+    // Text (+ optional vision context)
+    let userText = text || '(sem texto)';
+    if (visionNote) {
+      userText = `${text}\n\n[Análise da imagem anexada]\n${visionNote}`;
+    }
+
     let reply =
-      'Recebi sua mensagem no Aegis. Para eu responder com IA, o operador precisa configurar GROQ_API_KEY (ou OPENROUTER_API_KEY) no Vercel do Aegis.';
+      'Recebi no Aegis. Configure GROQ_API_KEY (texto) e GOOGLE_API_KEY (visão) no Vercel.';
 
     try {
-      const fleetRows = await sql`
-        SELECT name, status FROM agents ORDER BY name LIMIT 20
-      `;
-      const fleetHint = fleetRows
-        .map((a: any) => `${a.name}:${a.status}`)
-        .join(', ');
+      const fleetRows = await sql`SELECT name, status FROM agents ORDER BY name LIMIT 20`;
+      const fleetHint = fleetRows.map((a: any) => `${a.name}:${a.status}`).join(', ');
 
-      // Recent context for this chat (best-effort from last messages)
       const recent = await sql`
         SELECT content, type FROM agent_dispatch_messages
         WHERE from_agent_id = ${agent.id}
-        ORDER BY created_at DESC
-        LIMIT 12
+        ORDER BY created_at DESC LIMIT 12
       `;
       const history: Array<{ role: 'user' | 'assistant'; content: string }> = [];
       for (const row of [...recent].reverse()) {
@@ -160,25 +255,25 @@ export async function POST(request: Request) {
           /* skip */
         }
       }
-      // drop the message we just inserted (last user) to avoid dup — jarvisReply adds userText
       const hist = history.slice(0, -1).slice(-8);
 
       const brain = await jarvisReply({
-        userText: text || '(sem texto)',
+        userText,
         history: hist,
         fleetHint,
       });
       if (brain?.text) reply = brain.text;
     } catch (e: any) {
       console.error('[jarvis-brain]', e);
-      reply = `Tive um problema ao pensar nisso: ${e.message || 'erro'}. Tente de novo em instantes.`;
+      reply = visionNote
+        ? visionNote
+        : `Tive um problema ao pensar nisso: ${e.message || 'erro'}.`;
     }
 
     await sendTelegramMessage(token, chatId, reply, withKeyboard);
-
     await sql`
-      INSERT INTO agent_dispatch_messages (from_agent_id, to_agent_id, content, type)
-      VALUES (${agent.id}, NULL, ${reply}, 'response')
+      INSERT INTO agent_dispatch_messages (from_agent_id, content, type)
+      VALUES (${agent.id}, ${reply}, 'response')
     `;
 
     return NextResponse.json({ ok: true });
@@ -189,5 +284,8 @@ export async function POST(request: Request) {
 }
 
 export async function GET() {
-  return NextResponse.json({ service: 'aegis-telegram-gateway', brain: 'jarvis-brain' });
+  return NextResponse.json({
+    service: 'aegis-telegram-gateway',
+    features: ['chat', 'vision', 'resumo', 'pending', 'fleet-notify'],
+  });
 }
