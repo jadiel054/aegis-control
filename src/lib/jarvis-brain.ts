@@ -1,6 +1,9 @@
 /**
  * Jarvis Comando — conversational brain (Manus-style)
  * Uses GROQ_API_KEY or OPENROUTER_API_KEY from Aegis env.
+ *
+ * Groq (Oct 2026): Llama 3.x free tier mostly gone / enterprise.
+ * Production chat IDs: openai/gpt-oss-20b, openai/gpt-oss-120b, qwen/qwen3.8-27b
  */
 
 export const JARVIS_COMANDO_SYSTEM_PROMPT = `Você é o **Jarvis Comando**, porta de entrada do fleet Aegis do operador Jadiel.
@@ -16,50 +19,40 @@ export const JARVIS_COMANDO_SYSTEM_PROMPT = `Você é o **Jarvis Comando**, port
 Você é o **hub Telegram** do ecossistema:
 - **Aegis** = mission control (status, comandos, segurança)
 - **Morpheus** = orquestrador multi-LLM / planos
-- **Plutão** = worker / OS / write-gate
+- **Plutão** = worker / OS / write-gate (modelos locais GGUF no app Android no futuro)
 - **Zarith** = agente executivo
-- Outros bots Jarvis_* = papéis especializados (ainda em configuração)
 
-Você NÃO inventa que já executou deploy, commit ou write em produção. Se a ação exigir write (código, deploy, banco), diga o que faria e que o próximo passo é aprovar no Aegis / write-gate.
+Você NÃO inventa que já executou deploy, commit ou write em produção. Se a ação exigir write, diga o próximo passo (aprovação no Aegis / write-gate).
 
-## Capacidades atuais neste canal
+## Capacidades atuais
 - Conversar, planejar, orientar e resumir status do fleet
-- Explicar comandos: /start /status /id /help
+- Comandos: /start /status /id /help
 - Registrar a conversa no Aegis
-- Orientar próximos passos técnicos com clareza
 
-## Capacidades em evolução (seja honesto)
-- Execução autônoma completa (GitHub/Vercel/Neon) passa por Morpheus + Plutão + write-gate
-- Outros bots do BotFather ainda podem estar offline até configurados
-
-## Estilo estilo Manus
-- Confirme o que entendeu em uma frase quando a tarefa for complexa
+## Estilo Manus
+- Confirme o que entendeu quando a tarefa for complexa
 - Proponha 1–3 próximos passos concretos
-- Pergunte o que falta em vez de assumir credenciais ou decisões irreversíveis
-- Nunca peça para colar tokens de bot ou senhas neste chat; oriente a usar o painel Aegis
+- Não peça tokens/senhas no chat; oriente o painel Aegis
 
 ## Identidade
-Se perguntarem quem você é: Jarvis Comando, hub Telegram do Aegis SOC.`;
+Jarvis Comando, hub Telegram do Aegis SOC.`;
 
 type ChatMsg = { role: 'system' | 'user' | 'assistant'; content: string };
 
-/** Groq model ids change; try several until one works. */
+/** Active Groq chat models (Oct 2026) — avoid decommissioned Llama 3.1/3.3 free ids */
 const GROQ_MODEL_CANDIDATES = [
   process.env.JARVIS_MODEL,
-  'llama-3.3-70b-versatile',
-  'llama-3.1-70b-versatile',
-  'llama-3.1-8b-instant',
-  'meta-llama/llama-4-scout-17b-16e-instruct',
+  'openai/gpt-oss-20b',
   'openai/gpt-oss-120b',
-  'gemma2-9b-it',
+  'qwen/qwen3.8-27b',
+  'openai/gpt-oss-safeguard-20b',
 ].filter(Boolean) as string[];
 
 const OPENROUTER_MODEL_CANDIDATES = [
   process.env.JARVIS_MODEL,
-  'meta-llama/llama-3.3-70b-instruct',
-  'meta-llama/llama-3.1-70b-instruct',
-  'google/gemini-2.5-flash',
   'openai/gpt-4o-mini',
+  'google/gemini-2.5-flash',
+  'meta-llama/llama-3.3-70b-instruct',
 ].filter(Boolean) as string[];
 
 function providerConfig() {
@@ -142,7 +135,7 @@ export async function jarvisReply(opts: {
   if (opts.fleetHint) {
     messages.push({
       role: 'system',
-      content: `Snapshot recente do fleet (pode estar desatualizado):\n${opts.fleetHint}`,
+      content: `Snapshot recente do fleet:\n${opts.fleetHint}`,
     });
   }
 
@@ -157,12 +150,12 @@ export async function jarvisReply(opts: {
       return await callChat(cfg.url, cfg.key, model, messages);
     } catch (e: any) {
       lastError = e;
-      // try next model on 404 / model_not_found
       const msg = String(e?.message || '');
       if (
-        e?.status === 404
+        e?.status === 400
+        || e?.status === 404
         || e?.code === 'model_not_found'
-        || /model_not_found|does not exist|not have access/i.test(msg)
+        || /model_not_found|does not exist|decommissioned|not have access|no longer supported/i.test(msg)
       ) {
         continue;
       }
