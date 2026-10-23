@@ -49,3 +49,29 @@ export async function setTelegramWebhook(
 export async function getTelegramWebhookInfo(token: string) {
   return telegramApi(token, 'getWebhookInfo');
 }
+
+/** Menu / that appears when user taps the command list in Telegram */
+export const AEGIS_BOT_COMMANDS = [
+  { command: 'start', description: 'Início e teclado rápido' },
+  { command: 'status', description: 'Status do fleet no Aegis' },
+  { command: 'id', description: 'Mostrar meu chat_id' },
+  { command: 'help', description: 'Ajuda dos comandos' },
+];
+
+export async function setBotCommands(token: string) {
+  return telegramApi(token, 'setMyCommands', {
+    commands: AEGIS_BOT_COMMANDS,
+  });
+}
+
+/** Persistent reply keyboard (tap buttons send the text) */
+export function quickReplyKeyboard() {
+  return {
+    keyboard: [
+      [{ text: '/status' }, { text: '/id' }],
+      [{ text: '/help' }, { text: '/start' }],
+    ],
+    resize_keyboard: true,
+    is_persistent: true,
+  };
+}

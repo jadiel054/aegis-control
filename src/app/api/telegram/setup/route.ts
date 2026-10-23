@@ -1,6 +1,10 @@
 import { NextResponse } from 'next/server';
 import { getSql } from '@/lib/db';
-import { getTelegramWebhookInfo, setTelegramWebhook } from '@/lib/telegram';
+import {
+  getTelegramWebhookInfo,
+  setBotCommands,
+  setTelegramWebhook,
+} from '@/lib/telegram';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -11,10 +15,6 @@ function publicBaseUrl() {
   return 'https://aegis-control-sand.vercel.app';
 }
 
-/**
- * Registers Telegram webhook for an agent that already has telegram_bot_token in Neon.
- * POST { "agent": "Jarvis Comando" }
- */
 export async function POST(request: Request) {
   try {
     const setupSecret = process.env.TELEGRAM_SETUP_SECRET;
@@ -39,10 +39,7 @@ export async function POST(request: Request) {
     }
     if (!agent.telegram_bot_token) {
       return NextResponse.json(
-        {
-          error:
-            'Token ainda não configurado. Salve o token em Config. Agentes e tente de novo.',
-        },
+        { error: 'Token ainda não configurado no Aegis.' },
         { status: 400 }
       );
     }
@@ -51,6 +48,7 @@ export async function POST(request: Request) {
     const secret = process.env.TELEGRAM_WEBHOOK_SECRET;
 
     await setTelegramWebhook(agent.telegram_bot_token, webhookUrl, secret);
+    await setBotCommands(agent.telegram_bot_token);
     const info = await getTelegramWebhookInfo(agent.telegram_bot_token);
 
     await sql`
@@ -65,6 +63,7 @@ export async function POST(request: Request) {
       success: true,
       agent: agent.name,
       webhookUrl,
+      commands: true,
       telegram: info,
     });
   } catch (error: any) {

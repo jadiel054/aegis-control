@@ -1,15 +1,10 @@
 import { NextResponse } from 'next/server';
 import { getSql } from '@/lib/db';
-import { sendTelegramMessage } from '@/lib/telegram';
+import { quickReplyKeyboard, sendTelegramMessage } from '@/lib/telegram';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-/**
- * Telegram webhook for fleet bots (hub: Jarvis Comando).
- * URL: /api/telegram/webhook?agent=Jarvis%20Comando
- * Optional header: X-Telegram-Bot-Api-Secret-Token = TELEGRAM_WEBHOOK_SECRET
- */
 export async function POST(request: Request) {
   try {
     const secret = process.env.TELEGRAM_WEBHOOK_SECRET;
@@ -38,16 +33,13 @@ export async function POST(request: Request) {
     const sql = getSql();
     const agents = await sql`
       SELECT * FROM agents
-      WHERE LOWER(name) = LOWER(${agentName})
-         OR (agent_type = 'telegram_bot' AND LOWER(name) = LOWER(${agentName}))
-      LIMIT 1
+      WHERE LOWER(name) = LOWER(${agentName}) LIMIT 1
     `;
     const agent = agents[0];
     if (!agent) {
       return NextResponse.json({ error: `Agent ${agentName} not found` }, { status: 404 });
     }
 
-    // Authorization: if chat_ids configured, only allow those
     const allowed = Array.isArray(agent.telegram_chat_ids)
       ? agent.telegram_chat_ids.map(String)
       : [];
@@ -62,7 +54,6 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: true, denied: true });
     }
 
-    // Log inbound as dispatch message
     await sql`
       INSERT INTO agent_dispatch_messages (from_agent_id, to_agent_id, content, type)
       VALUES (
@@ -73,7 +64,6 @@ export async function POST(request: Request) {
       )
     `;
 
-    // Heartbeat touch
     await sql`
       UPDATE agents SET status = 'online', last_heartbeat = NOW(),
         metadata = COALESCE(metadata, '{}'::jsonb) || ${JSON.stringify({ last_telegram_chat_id: chatId })}::jsonb
@@ -84,34 +74,39 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: true, warning: 'no token configured' });
     }
 
-    // Commands
-    if (text === '/start' || text.startsWith('/start ')) {
+    const token = agent.telegram_bot_token as string;
+    const withKeyboard = { reply_markup: quickReplyKeyboard() };
+
+    if (text === '/start' || text.startsWith('/start ') || text === '/help') {
       await sendTelegramMessage(
-        agent.telegram_bot_token,
+        token,
         chatId,
         [
           `<b>Aegis · ${agent.name}</b>`,
           '',
           'Hub Telegram do fleet (estilo Manus).',
           '',
-          'Comandos:',
-          '/start — esta mensagem',
-          '/status — status no Aegis',
-          '/id — seu chat_id (para liberar no painel)',
+          'Toque nos botões abaixo ou digite:',
+          '/start — início + teclado',
+          '/status — status do fleet',
+          '/id — seu chat_id',
+          '/help — esta ajuda',
           '',
-          'Ou envie qualquer texto: registra no Aegis e responde.',
+          'Texto livre: registra no Aegis e responde.',
           '',
           `<i>chat_id: <code>${chatId}</code></i>`,
-        ].join('\n')
+        ].join('\n'),
+        withKeyboard
       );
       return NextResponse.json({ ok: true });
     }
 
     if (text === '/id') {
       await sendTelegramMessage(
-        agent.telegram_bot_token,
+        token,
         chatId,
-        `Seu chat_id: <code>${chatId}</code>\nCole este valor em Aegis → Config. Agentes → ${agent.name}.`
+        `Seu chat_id: <code>${chatId}</code>\nJá está liberado se aparecer no painel Aegis.`,
+        withKeyboard
       );
       return NextResponse.json({ ok: true });
     }
@@ -119,21 +114,21 @@ export async function POST(request: Request) {
     if (text === '/status') {
       const onlineAgents = await sql`
         SELECT name, status, last_heartbeat FROM agents
-        ORDER BY name LIMIT 20
+        ORDER BY name LIMIT 30
       `;
       const lines = onlineAgents.map(
         (a: any) =>
           `• <b>${a.name}</b> — ${a.status} (${a.last_heartbeat ? new Date(a.last_heartbeat).toLocaleString() : 'never'})`
       );
       await sendTelegramMessage(
-        agent.telegram_bot_token,
+        token,
         chatId,
-        `<b>Fleet status</b>\n\n${lines.join('\n')}`
+        `<b>Fleet status</b>\n\n${lines.join('\n')}`,
+        withKeyboard
       );
       return NextResponse.json({ ok: true });
     }
 
-    // Default: acknowledge + optional Morpheus forward
     let reply =
       `✅ Recebido no Aegis (${agent.name}).\n` +
       `Mensagem registrada no feed.\n` +
@@ -170,7 +165,7 @@ export async function POST(request: Request) {
       }
     }
 
-    await sendTelegramMessage(agent.telegram_bot_token, chatId, reply);
+    await sendTelegramMessage(token, chatId, reply, withKeyboard);
 
     await sql`
       INSERT INTO agent_dispatch_messages (from_agent_id, to_agent_id, content, type)
