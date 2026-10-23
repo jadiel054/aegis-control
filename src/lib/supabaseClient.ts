@@ -1,17 +1,10 @@
-import { createClient } from '@supabase/supabase-js';
-
-const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL || '';
-const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY || '';
-
-if (!supabaseUrl || !supabaseAnonKey) {
-  console.warn(
-    'Supabase environment variables are missing! Ensure NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY are set.'
-  );
-}
-
-export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
-  auth: {
-    persistSession: true,
-    autoRefreshToken: true,
-  },
-});
+/**
+ * REMOVED — Aegis no longer uses Supabase.
+ * All database access goes through @/lib/db (Neon) on the server
+ * and @/lib/api-client on the browser.
+ *
+ * This file is kept only to avoid broken imports during migration;
+ * delete any remaining `import from '@/lib/supabaseClient'`.
+ */
+export const supabase = null as never;
+throw new Error('Supabase client removed. Use @/lib/db (server) or @/lib/api-client (browser).');
