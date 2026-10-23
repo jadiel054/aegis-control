@@ -37,7 +37,6 @@ function formatEvent(ev: FleetEvent) {
   return lines.join('\n');
 }
 
-/** Push event to Jarvis Comando operator chat(s). */
 export async function notifyOperatorTelegram(ev: FleetEvent) {
   const sql = getSql();
   const rows = await sql`
@@ -67,7 +66,6 @@ export async function notifyOperatorTelegram(ev: FleetEvent) {
     }
   }
 
-  // Audit log
   const jarvis = await sql`SELECT id FROM agents WHERE LOWER(name) = 'jarvis comando' LIMIT 1`;
   if (jarvis[0]) {
     await sql`
@@ -87,7 +85,7 @@ export async function buildFleetResumo() {
     ORDER BY updated_at DESC NULLS LAST LIMIT 8
   `;
   const cmds = await sql`
-    SELECT command_type, status, issued_by, created_at FROM agent_commands
+    SELECT command_type, status, issued_by, created_at FROM commands
     ORDER BY created_at DESC LIMIT 8
   `;
   const msgs = await sql`
@@ -143,6 +141,6 @@ export function formatResumoHtml(data: Awaited<ReturnType<typeof buildFleetResum
     }
   }
 
-  lines.push('', '<i>Use /pending para foco em aprovações. Envie print para análise visual.</i>');
+  lines.push('', '<i>Use /pending para aprovações. Envie print para análise visual.</i>');
   return lines.join('\n');
 }
