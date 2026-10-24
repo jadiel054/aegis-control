@@ -55,6 +55,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
     { name: 'Feed em Tempo Real', path: '/messages', icon: Activity },
     { name: 'Quadro de Segurança', path: '/security', icon: ShieldAlert },
     { name: 'Painel de Testes', path: '/tests', icon: FlaskConical },
+    { name: 'Configurações', path: '/settings/profile', icon: Settings2 },
   ];
 
   return (
