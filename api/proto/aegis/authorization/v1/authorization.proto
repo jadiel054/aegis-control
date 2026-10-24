@@ -1,0 +1,32 @@
+syntax = "proto3";
+
+package aegis.authorization.v1;
+
+option go_package = "aegis-control/gen/go/aegis/authorization/v1;authorizationv1";
+
+service AuthorizationService {
+  rpc EvaluateAccess(EvaluateAccessRequest) returns (EvaluateAccessResponse);
+}
+
+message EvaluateAccessRequest {
+  string request_id = 1;
+  string tenant_id = 2;
+  string principal_id = 3;
+  string action = 4;
+  string resource = 5;
+}
+
+enum Decision {
+  DECISION_UNSPECIFIED = 0;
+  DECISION_ALLOW = 1;
+  DECISION_DENY = 2;
+}
+
+message EvaluateAccessResponse {
+  string request_id = 1;
+  Decision decision = 2;
+  string reason = 3;
+  string policy_id = 4;
+  string policy_revision = 5;
+  string evaluated_at = 6;
+}

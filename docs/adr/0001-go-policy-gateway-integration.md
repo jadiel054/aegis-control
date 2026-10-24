@@ -1,78 +1,49 @@
 # ADR 0001: Integração do policy gateway Go com Aegis Control
 
-- **Status:** Proposta — requer confirmação do consumidor gRPC e do destino operacional antes de ativar tráfego.
+- **Status:** Aceita para a fundação v1; produção continua desabilitada até cumprir os bloqueios listados abaixo.
 - **Data:** 2026-10-24
-- **Contexto:** PR #9 adicionou `pkg/cache` e `pkg/gateway`, mas o repositório atual é um aplicativo Next.js implantado no Vercel. Não há servidor gRPC, entrypoint Go, cliente do gateway nem chamadas de produção para esses pacotes.
+- **Contexto:** A PR #9 adicionou `pkg/cache` e `pkg/gateway`; a PR #10 endureceu esses componentes. O aplicativo Next.js está no Vercel, enquanto o gateway Go precisa de um processo persistente separado.
 
-## Problema
+## Decisões v1
 
-A worker pool e o cache Go são estado em memória de longa duração. Colocá-los dentro de uma função serverless Next.js criaria instâncias e caches independentes, sem garantia de persistência ou coordenação. Por outro lado, operar um serviço Go separado sem consumidor gRPC real adicionaria custo e complexidade sem benefício comprovado.
+1. Next.js permanece como plano de controle e fonte das políticas no Neon. O serviço Go não recebe credenciais do banco.
+2. A tabela `authorization_policies` define regras de correspondência **exata** por `tenant_id`, `principal_id`, `action` e `resource`. Wildcards e herança não fazem parte da v1. A combinação é única; ausência de regra, snapshot ausente/expirado e regra fora da validade resultam em `DENY`.
+3. O snapshot é servido por `GET /api/internal/policies/snapshot`, protegido por `AEGIS_GATEWAY_SYNC_SECRET`, separado da API key global de agentes. A revisão é um SHA-256 do conteúdo ordenado. O snapshot vence após 30 segundos por padrão; `AEGIS_POLICY_SNAPSHOT_TTL_SECONDS` permite configurar de 1 a 3600 segundos. O serviço Go consulta a cada 10 segundos por padrão e não autoriza usando snapshot expirado.
+4. O primeiro consumidor do RPC no Next.js é somente a rota diagnóstica `POST /api/admin/authorization/evaluate`, protegida por `AEGIS_AUTHORIZATION_DIAGNOSTIC_KEY`, uma credencial server-to-server que nunca vai ao browser. Ela permite validar o contrato, mas **não autoriza operações de agentes**. A identidade enviada nessa rota é fornecida pelo chamador confiável.
+5. O servidor gRPC exige TLS com certificado e chave configurados. A autenticação RPC usa `AEGIS_GRPC_API_KEY`, distinta de `AEGIS_API_KEY` e da credencial de sincronização do snapshot. O client Node.js usa a mesma definição Protobuf e credencial server-side.
+6. Nenhum servidor é implantado por esta ADR/PR e nenhum tráfego de produção é encaminhado ao gateway. Nenhum provedor de hospedagem é escolhido.
 
-## Decisão proposta
-
-1. Manter Next.js como plano de controle: painel, autenticação de operadores, APIs de administração e persistência das políticas no Neon.
-2. Não importar nem tentar executar a worker pool Go dentro das rotas serverless do Next.js.
-3. Se houver um consumidor que realmente precise de gRPC, executar o gateway como serviço Go persistente separado. O serviço deverá ter entrypoint próprio, servidor/protobuf, health checks, configuração de workers e deployment independente. Nenhum provedor de hospedagem é escolhido por esta ADR.
-4. Para sincronização inicial, preferir snapshots de política versionados fornecidos por uma interface interna autenticada do plano de controle, em vez de distribuir credenciais amplas do Neon ao serviço Go. A frequência de atualização e mecanismo para revogações urgentes deverão ser definidos por requisito de latência.
-5. Se nenhum consumidor gRPC for identificado, não ativar nem operar o serviço Go; decidir se a autorização deve ser implementada no runtime TypeScript atual e manter o pacote Go como protótipo até essa decisão.
-6. Não encaminhar tráfego de produção ao gateway até que o contrato de validade da política offline, autenticação serviço-a-serviço, observabilidade e rollback estejam definidos.
-
-Esta ADR é uma proposta para revisão. Ela não afirma que a integração já existe nem seleciona a hospedagem final.
-
-## Fluxo proposto se o serviço Go for adotado
+## Fluxo v1 implementado
 
 ```text
-Operador / agente
-      │ HTTPS
+Caller administrativo confiável
+      │ HTTPS + segredo diagnóstico
       ▼
-Next.js — plano de controle
-      ├── autentica e audita mudanças
-      ├── persiste políticas no Neon
-      └── expõe snapshot versionado por endpoint interno autenticado
-                         │ HTTPS privado / credencial de serviço
-                         ▼
-Go — serviço persistente de decisão
-      ├── valida versão e validade do snapshot
-      ├── publica cópia imutável na cache local
-      ├── responde ao consumidor por gRPC
-      └── expõe health/readiness e métricas operacionais
+Next.js ─────── Neon.authorization_policies
+   │  ▲                 │
+   │  │ gRPC/TLS        │ snapshot HTTPS + segredo dedicado
+   ▼  │                 ▼
+rota diagnóstica      serviço Go persistente
+                         ├── valida e publica snapshot imutável
+                         ├── avalia correspondência exata
+                         └── expõe health/readiness gRPC
 ```
 
-## Contratos que ainda precisam ser aprovados
+## Contrato gRPC
 
-- **Identidade da decisão:** `tenant_id`, principal, ação e recurso, não apenas um `policy_id` opaco.
-- **Resposta:** permitir/negar, motivo, versão da política e instante da avaliação, sem expor detalhes desnecessários ao chamador.
-- **Frescor offline:** idade máxima de uma política `Allow`; após o limite ou em ausência de versão confiável, negar por padrão. O limite numérico é decisão de produto/segurança e não é inventado nesta ADR.
-- **Atualização:** intervalo de polling e/ou notificação de revogação, com reconciliação para recuperar eventos perdidos.
-- **Autenticação:** credencial serviço-a-serviço com rotação, escopo mínimo e armazenamento server-side; separar de API keys de agentes.
-- **Operação:** limites de fila, timeouts, política de shutdown, health/readiness, métricas, canário e rollback.
+O schema está em `api/proto/aegis/authorization/v1/authorization.proto`; o RPC `EvaluateAccess` recebe `request_id`, tenant, principal, ação e recurso. A resposta contém `ALLOW` ou `DENY`, motivo, ID da regra, revisão e instante da decisão. Recusas de política são respostas normais; autenticação inválida e problemas operacionais são erros gRPC. O consumidor deve falhar fechado em qualquer erro RPC.
 
-## Alternativas consideradas
+## Limitações assumidas
 
-### Implementar o gateway diretamente no Next.js/TypeScript
+- A v1 não inclui UI nem endpoints para criar/editar regras; a migration cria a fonte de dados e nenhum `ALLOW` é inserido automaticamente. A gestão de políticas ainda precisa de um fluxo administrativo auditável.
+- O aplicativo atual usa uma API key compartilhada por agentes e tem uma sessão de painel que não é apropriada como controle de acesso para esta nova rota. Portanto, a rota exige segredo server-to-server dedicado e não aceita chamadas de agentes; identidade por agente continua sem prova confiável.
+- O TTL padrão de 30 segundos é configurável e conservador para a fundação, mas precisa de aprovação de segurança/produto antes de produção, considerando o impacto de revogações.
+- TLS, rotação de segredos, rede privada, métricas operacionais, canário e rollback precisam ser definidos no ambiente de implantação escolhido.
 
-**Vantagens:** menos serviços, sem chamada gRPC adicional, compatível com o deployment atual.
-**Desvantagens:** não fornece um serviço gRPC/worker pool persistente; pode ser a escolha correta se o consumidor for apenas o próprio app ou seus endpoints HTTP.
+## Bloqueios antes de produção
 
-### Integrar a pool Go dentro de uma rota Next.js serverless
-
-**Rejeitada:** não há garantia de processo persistente, estado/cache compartilhados ou lifecycle confiável entre invocações.
-
-### Criar imediatamente um serviço Go sem consumidor identificado
-
-**Adiada:** o código não teria caminho de produção demonstrável e o serviço adicionaria superfície operacional sem requisito confirmado.
-
-## Consequências
-
-- O pacote Go permanece uma biblioteca/fundação até existir entrypoint e consumidor real.
-- Uma adoção gRPC exige deployment persistente independente e operação adicional.
-- A separação de planos reduz acoplamento entre Vercel/Next.js e o runtime Go, mas exige contrato de snapshots e autenticação entre serviços.
-- A implementação de cache/worker pool deve ser endurecida e testada antes da exposição ao tráfego.
-
-## Critérios para encerrar esta ADR
-
-- [ ] Consumidor e protocolo de integração identificados.
-- [ ] Escolha entre serviço Go persistente e autorização TypeScript aprovada.
-- [ ] Host/runtime e responsável operacional definidos, se Go for escolhido.
-- [ ] Contrato de política e janela offline aprovados.
-- [ ] Plano de autenticação, observabilidade, canário e rollback aprovado.
+- [ ] Definir autenticação individual de agente/serviço e vincular o principal ao caller autenticado, sem aceitar identidade arbitrária do body.
+- [ ] Aprovar formalmente o TTL máximo de política offline e o intervalo de sincronização.
+- [ ] Criar fluxo administrativo auditável para gerenciar políticas e testar migrações no banco de produção.
+- [ ] Escolher o host/runtime persistente, responsável operacional, certificados e rotação dos dois segredos de serviço.
+- [ ] Adicionar observabilidade, teste de integração implantado, modo sombra, canário e plano de rollback.
