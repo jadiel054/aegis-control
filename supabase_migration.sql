@@ -19,12 +19,37 @@ CREATE TABLE IF NOT EXISTS public.tasks (
     title TEXT NOT NULL,
     description TEXT,
     assigned_agent_id UUID REFERENCES public.agents(id) ON DELETE SET NULL,
-    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'in_progress', 'done', 'failed')),
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'in_progress', 'done', 'rejected', 'failed')),
     priority TEXT NOT NULL DEFAULT 'medium' CHECK (priority IN ('low', 'medium', 'high')),
     created_by TEXT NOT NULL DEFAULT 'system',
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
+
+-- 2b. Create table 'task_steps'
+CREATE TABLE IF NOT EXISTS public.task_steps (
+    id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    task_id UUID NOT NULL REFERENCES public.tasks(id) ON DELETE CASCADE,
+    step_index INTEGER NOT NULL DEFAULT 0,
+    role TEXT NOT NULL,
+    agent_name TEXT,
+    agent_id UUID REFERENCES public.agents(id) ON DELETE SET NULL,
+    status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'ready', 'running', 'awaiting_approval', 'approved', 'done', 'rejected', 'failed')),
+    requires_approval BOOLEAN NOT NULL DEFAULT false,
+    execution_mode TEXT NOT NULL DEFAULT 'simulated' CHECK (execution_mode IN ('real', 'simulated')),
+    approved_by TEXT,
+    approved_at TIMESTAMP WITH TIME ZONE,
+    input TEXT,
+    output TEXT,
+    started_at TIMESTAMP WITH TIME ZONE,
+    finished_at TIMESTAMP WITH TIME ZONE,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+);
+
+-- Migration snippet for existing databases:
+-- ALTER TABLE public.tasks DROP CONSTRAINT IF EXISTS tasks_status_check;
+-- ALTER TABLE public.tasks ADD CONSTRAINT tasks_status_check CHECK (status IN ('pending', 'in_progress', 'done', 'rejected', 'failed'));
+-- ALTER TABLE public.task_steps ADD COLUMN IF NOT EXISTS execution_mode TEXT NOT NULL DEFAULT 'simulated';
 
 -- 3. Create table 'commands'
 CREATE TABLE IF NOT EXISTS public.commands (

@@ -4,6 +4,7 @@ import {
   approveStep,
   createMission,
   getMission,
+  isChatAllowed,
   rejectStep,
 } from '@/lib/dispatcher';
 import { advanceMission } from '@/lib/mission-executor';
@@ -64,7 +65,7 @@ export async function POST(request: Request) {
     const allowed = Array.isArray(agent.telegram_chat_ids)
       ? agent.telegram_chat_ids.map(String)
       : [];
-    if (allowed.length > 0 && !allowed.includes(chatId)) {
+    if ((allowed.length > 0 && !allowed.includes(chatId)) || !isChatAllowed(chatId)) {
       if (agent.telegram_bot_token) {
         await sendTelegramMessage(
           agent.telegram_bot_token,
