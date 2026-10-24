@@ -12,13 +12,17 @@ export default function TestsPage() {
   const [commands, setCommands] = useState<any[]>([]);
 
   const load = useCallback(async () => {
-    const [a, c] = await Promise.all([
-      fetch('/api/agents').then((r) => r.json()),
-      fetch('/api/commands').then((r) => r.json()),
-    ]);
-    setAgents(a.agents || []);
-    setCommands((c.commands || []).filter((x: any) => x.command_type === 'run_diagnostic').slice(0, 20));
-    if (!agentId && a.agents?.[0]) setAgentId(a.agents[0].id);
+    try {
+      const [a, c] = await Promise.all([
+        fetch('/api/agents').then((r) => r.json()),
+        fetch('/api/commands').then((r) => r.json()),
+      ]);
+      setAgents(a.agents || []);
+      setCommands((c.commands || []).filter((x: any) => x.command_type === 'run_diagnostic').slice(0, 20));
+      if (!agentId && a.agents?.[0]) setAgentId(a.agents[0].id);
+    } catch (error) {
+      console.error('Failed to load test data:', error);
+    }
   }, [agentId]);
 
   useEffect(() => {

@@ -2,6 +2,8 @@ import { NextResponse } from 'next/server';
 import { getSql } from '@/lib/db';
 import { checkApiKey } from '@/lib/api-auth';
 
+export const dynamic = 'force-dynamic';
+
 export async function GET(
   request: Request,
   { params }: { params: Promise<{ agent_id?: string }> }

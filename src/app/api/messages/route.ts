@@ -3,6 +3,8 @@ import { getSql } from '@/lib/db';
 import { notifyOperatorTelegram } from '@/lib/fleet-notify';
 import { checkApiKey } from '@/lib/api-auth';
 
+export const dynamic = 'force-dynamic';
+
 export async function GET(request: Request) {
   try {
     const { searchParams } = new URL(request.url);

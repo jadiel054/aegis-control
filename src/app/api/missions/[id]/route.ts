@@ -7,6 +7,7 @@ import {
 } from '@/lib/dispatcher';
 
 export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
 
 import { checkApiKey } from '@/lib/api-auth';
 

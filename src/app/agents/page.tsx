@@ -62,7 +62,6 @@ export default function AgentsPage() {
   useEffect(() => {
     const a = agents.find((x) => x.id === selectedId);
     if (!a) return;
-    setToken('');
     setChatIds((a.telegram_chat_ids || []).join(', '));
     setWebhook(a.webhook_url || '');
     setAgentType(a.agent_type || 'llm_agent');

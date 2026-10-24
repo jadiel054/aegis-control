@@ -246,7 +246,7 @@ export default function OverviewPage() {
         </h3>
         <p className="text-xs text-slate-500 leading-relaxed uppercase">
           Backend migrado para Neon Postgres. Heartbeats, comandos e mensagens via Agent SDK.
-          Polling a cada 10s. Supabase desvinculado.
+          Polling a cada 10s.
         </p>
       </div>
     </DashboardLayout>

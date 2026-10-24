@@ -4,6 +4,7 @@ import { buildAuditMarkdown } from '@/lib/audit-report';
 import { getMission } from '@/lib/dispatcher';
 
 export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
 
 /** GET: download markdown body. POST: send audit doc to Telegram. */
 import { checkApiKey } from '@/lib/api-auth';
