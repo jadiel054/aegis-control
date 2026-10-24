@@ -10,19 +10,30 @@ import (
 )
 
 var (
-	ErrConnectionClosed = errors.New("gRPC connection closed: failing closed")
-	ErrPolicyNotFound   = errors.New("policy not found in local cache")
-	ErrAccessDenied     = errors.New("access denied (fail-closed)")
-	ErrQueueFull        = errors.New("worker pool queue full: request rejected")
+	ErrConnectionClosed  = errors.New("gRPC connection closed: failing closed")
+	ErrPolicyNotFound    = errors.New("policy not found in local cache")
+	ErrAccessDenied      = errors.New("access denied (fail-closed)")
+	ErrQueueFull         = errors.New("worker pool queue full: request rejected")
+	ErrPoolStopped       = errors.New("worker pool is stopped")
+	ErrInvalidPoolConfig = errors.New("worker pool requires workers > 0 and queueSize >= 0")
+	ErrNilTask           = errors.New("worker pool task must not be nil")
+	ErrNilPolicyCache    = errors.New("policy cache must not be nil")
+	ErrNilContext        = errors.New("context must not be nil")
 )
 
-// WorkerPool limits goroutines handling downstream gRPC requests.
+// WorkerPool limits goroutines handling downstream requests.
 type WorkerPool struct {
-	tasks chan func()
-	wg    sync.WaitGroup
+	tasks   chan func()
+	wg      sync.WaitGroup
+	mu      sync.Mutex
+	stopped bool
 }
 
-func NewWorkerPool(workers int, queueSize int) *WorkerPool {
+func NewWorkerPool(workers int, queueSize int) (*WorkerPool, error) {
+	if workers <= 0 || queueSize < 0 {
+		return nil, ErrInvalidPoolConfig
+	}
+
 	pool := &WorkerPool{
 		tasks: make(chan func(), queueSize),
 	}
@@ -35,24 +46,44 @@ func NewWorkerPool(workers int, queueSize int) *WorkerPool {
 			}
 		}()
 	}
-	return pool
+	return pool, nil
 }
 
-func (wp *WorkerPool) Submit(task func()) bool {
+// Submit enqueues a task without blocking. It returns ErrQueueFull when the
+// queue has no capacity and ErrPoolStopped after shutdown has begun.
+func (wp *WorkerPool) Submit(task func()) error {
+	if task == nil {
+		return ErrNilTask
+	}
+
+	wp.mu.Lock()
+	defer wp.mu.Unlock()
+	if wp.stopped {
+		return ErrPoolStopped
+	}
+
 	select {
 	case wp.tasks <- task:
-		return true
+		return nil
 	default:
-		return false
+		return ErrQueueFull
 	}
 }
 
+// Stop is idempotent, prevents new submissions, drains accepted tasks, and
+// waits for workers to finish. Submitted tasks must not block indefinitely.
 func (wp *WorkerPool) Stop() {
-	close(wp.tasks)
+	wp.mu.Lock()
+	if !wp.stopped {
+		wp.stopped = true
+		close(wp.tasks)
+	}
+	wp.mu.Unlock()
 	wp.wg.Wait()
 }
 
-// AgentGatewayHandler handles incoming gateway requests with universal timeout and worker pool.
+// AgentGatewayHandler evaluates incoming requests with a context timeout and
+// a fail-closed local-policy fallback.
 type AgentGatewayHandler struct {
 	pool        *WorkerPool
 	cache       *cache.PolicyCache
@@ -60,12 +91,19 @@ type AgentGatewayHandler struct {
 	mu          sync.RWMutex
 }
 
-func NewAgentGatewayHandler(workers, queueSize int, policyCache *cache.PolicyCache) *AgentGatewayHandler {
+func NewAgentGatewayHandler(workers, queueSize int, policyCache *cache.PolicyCache) (*AgentGatewayHandler, error) {
+	if policyCache == nil {
+		return nil, ErrNilPolicyCache
+	}
+	pool, err := NewWorkerPool(workers, queueSize)
+	if err != nil {
+		return nil, err
+	}
 	return &AgentGatewayHandler{
-		pool:        NewWorkerPool(workers, queueSize),
+		pool:        pool,
 		cache:       policyCache,
 		isConnAlive: true,
-	}
+	}, nil
 }
 
 func (h *AgentGatewayHandler) SetConnectionState(alive bool) {
@@ -80,10 +118,19 @@ func (h *AgentGatewayHandler) IsConnectionAlive() bool {
 	return h.isConnAlive
 }
 
-// EvaluateAccess evaluates access with universal context timeout and fail-closed strategy.
+// EvaluateAccess evaluates access with a timeout. A context cancellation or
+// deadline that is visible when the result is received takes precedence over
+// the policy result.
 func (h *AgentGatewayHandler) EvaluateAccess(ctx context.Context, policyID string, timeout time.Duration) (bool, error) {
+	if ctx == nil {
+		return false, ErrNilContext
+	}
+
 	ctxTimeout, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
+	if err := ctxTimeout.Err(); err != nil {
+		return false, err
+	}
 
 	type result struct {
 		allow bool
@@ -91,22 +138,16 @@ func (h *AgentGatewayHandler) EvaluateAccess(ctx context.Context, policyID strin
 	}
 	resChan := make(chan result, 1)
 
-	submitted := h.pool.Submit(func() {
-		// O worker respeita o cancelamento do contexto: se o prazo estourou,
-		// abandona o trabalho imediatamente em vez de desperdiçar a pool.
-		select {
-		case <-ctxTimeout.Done():
-			resChan <- result{allow: false, err: ctxTimeout.Err()}
+	err := h.pool.Submit(func() {
+		if err := ctxTimeout.Err(); err != nil {
+			resChan <- result{allow: false, err: err}
 			return
-		default:
 		}
 
-		// Semântica única para ambos os estados: a decisão sai SEMPRE do cache local.
-		// A diferença é apenas o erro reportado — em partição de rede, uma política
-		// ausente do cache é tratada como acesso negado (fail-closed), nunca como
-		// "não encontrado" transitório.
-		p, exists := h.cache.GetPolicy(policyID)
-		if !exists || p == nil {
+		// A decisão vem sempre do cache local. Em partição, uma política
+		// ausente é negada, nunca tratada como uma permissão transitória.
+		policy, exists := h.cache.GetPolicy(policyID)
+		if !exists || policy == nil {
 			if h.IsConnectionAlive() {
 				resChan <- result{allow: false, err: ErrPolicyNotFound}
 			} else {
@@ -114,21 +155,26 @@ func (h *AgentGatewayHandler) EvaluateAccess(ctx context.Context, policyID strin
 			}
 			return
 		}
-		if !p.Allow {
+		if !policy.Allow {
 			resChan <- result{allow: false, err: ErrAccessDenied}
 			return
 		}
-		resChan <- result{allow: true, err: nil}
+		resChan <- result{allow: true}
 	})
-
-	if !submitted {
-		return false, ErrQueueFull
+	if err != nil {
+		if timeoutErr := ctxTimeout.Err(); timeoutErr != nil {
+			return false, timeoutErr
+		}
+		return false, err
 	}
 
 	select {
 	case <-ctxTimeout.Done():
 		return false, ctxTimeout.Err()
 	case res := <-resChan:
+		if err := ctxTimeout.Err(); err != nil {
+			return false, err
+		}
 		return res.allow, res.err
 	}
 }
