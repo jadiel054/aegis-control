@@ -13,6 +13,7 @@ var (
 	ErrConnectionClosed = errors.New("gRPC connection closed: failing closed")
 	ErrPolicyNotFound   = errors.New("policy not found in local cache")
 	ErrAccessDenied     = errors.New("access denied (fail-closed)")
+	ErrQueueFull        = errors.New("worker pool queue full: request rejected")
 )
 
 // WorkerPool limits goroutines handling downstream gRPC requests.
@@ -91,26 +92,26 @@ func (h *AgentGatewayHandler) EvaluateAccess(ctx context.Context, policyID strin
 	resChan := make(chan result, 1)
 
 	submitted := h.pool.Submit(func() {
-		// Fail-closed fallback logic on network partition / lost connection
-		if !h.IsConnectionAlive() {
-			// Fail-closed: check local cache with valid policy
-			p, exists := h.cache.GetPolicy(policyID)
-			if !exists || p == nil {
-				resChan <- result{allow: false, err: ErrAccessDenied}
-				return
-			}
-			if !p.Allow {
-				resChan <- result{allow: false, err: ErrAccessDenied}
-				return
-			}
-			resChan <- result{allow: true, err: nil}
+		// O worker respeita o cancelamento do contexto: se o prazo estourou,
+		// abandona o trabalho imediatamente em vez de desperdiçar a pool.
+		select {
+		case <-ctxTimeout.Done():
+			resChan <- result{allow: false, err: ctxTimeout.Err()}
 			return
+		default:
 		}
 
-		// Connected state
+		// Semântica única para ambos os estados: a decisão sai SEMPRE do cache local.
+		// A diferença é apenas o erro reportado — em partição de rede, uma política
+		// ausente do cache é tratada como acesso negado (fail-closed), nunca como
+		// "não encontrado" transitório.
 		p, exists := h.cache.GetPolicy(policyID)
 		if !exists || p == nil {
-			resChan <- result{allow: false, err: ErrPolicyNotFound}
+			if h.IsConnectionAlive() {
+				resChan <- result{allow: false, err: ErrPolicyNotFound}
+			} else {
+				resChan <- result{allow: false, err: ErrAccessDenied}
+			}
 			return
 		}
 		if !p.Allow {
@@ -121,7 +122,7 @@ func (h *AgentGatewayHandler) EvaluateAccess(ctx context.Context, policyID strin
 	})
 
 	if !submitted {
-		return false, errors.New("worker pool queue full: request rejected")
+		return false, ErrQueueFull
 	}
 
 	select {

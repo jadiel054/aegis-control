@@ -49,3 +49,25 @@ func TestConcurrentPolicyCache(t *testing.T) {
 
 	wg.Wait()
 }
+
+func TestGetPolicyReturnsDefensiveCopy(t *testing.T) {
+	c := &PolicyCache{}
+	c.UpdatePolicies(map[string]*Policy{
+		"p1": {ID: "p1", Allow: true},
+	})
+
+	got, ok := c.GetPolicy("p1")
+	if !ok || got == nil {
+		t.Fatal("expected policy p1 to exist")
+	}
+	got.ID = "mutated"
+	got.Allow = false
+
+	again, ok := c.GetPolicy("p1")
+	if !ok || again == nil {
+		t.Fatal("expected policy p1 to remain in cache")
+	}
+	if again.ID != "p1" || !again.Allow {
+		t.Fatalf("mutating GetPolicy result changed cached policy: %+v", again)
+	}
+}
