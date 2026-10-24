@@ -18,6 +18,18 @@ DATABASE_URL=postgresql://...@ep-xxx-pooler....neon.tech/neondb?sslmode=require
 AEGIS_ADMIN_PASSWORD=sua-senha-forte
 ```
 
+### API Authentication
+All write operations (POST, PATCH) require API key authentication via one of these headers:
+- `Authorization: Bearer YOUR_AEGIS_API_KEY`
+- `x-api-key: YOUR_AEGIS_API_KEY`
+
+Required environment variable:
+```env
+AEGIS_API_KEY=your-strong-api-key-minimum-32-characters
+```
+
+**Important:** Agents and the dashboard must include the API key in all write requests.
+
 ## Agent SDK
 
 See `sdk/aegis-agent-sdk.ts`.
@@ -36,7 +48,10 @@ Env for each agent:
 ```env
 AEGIS_BASE_URL=https://your-aegis.vercel.app
 AEGIS_AGENT_NAME=Plutao   # or Morpheus, Zarith, VitaBot...
+AEGIS_API_KEY=your-agent-api-key   # Required for authenticated requests
 ```
+
+**Note:** All agents must send the `x-api-key` or `Authorization: Bearer` header in requests to write endpoints.
 
 ## Registered agents (seed)
 

@@ -215,6 +215,11 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: true });
     }
 
+    if (text === '/approve') {
+      await sendTelegramMessage(token, chatId, 'Uso: <code>/approve &lt;id&gt;</code>', withKeyboard);
+      return NextResponse.json({ ok: true });
+    }
+
     if (text.startsWith('/approve ')) {
       const id = text.replace('/approve ', '').trim();
       try {
@@ -242,6 +247,11 @@ export async function POST(request: Request) {
       } catch (e: any) {
         await sendTelegramMessage(token, chatId, `Erro: ${e.message}`, withKeyboard);
       }
+      return NextResponse.json({ ok: true });
+    }
+
+    if (text === '/reject') {
+      await sendTelegramMessage(token, chatId, 'Uso: <code>/reject &lt;id&gt;</code>', withKeyboard);
       return NextResponse.json({ ok: true });
     }
 
