@@ -71,17 +71,7 @@ export async function executeReadyStep(taskId: string, stepIndex?: number) {
         `Plano bootstrap (${agentLabel}): analisar "${mission.task.title}" e preparar execução para o worker.`;
     } else if (step.role === 'worker' || /plutao|plutão/i.test(agentLabel)) {
       if (execMode === 'real') {
-        output = [
-          `Execução REAL (${agentLabel}):`,
-          `- Missão: ${mission.task.title}`,
-          `- Entrada do orquestrador:`,
-          input.slice(0, 1500),
-          '',
-          'Ações executadas no ambiente:',
-          '1. Validação de parâmetros realizada.',
-          '2. Mudanças e scripts aplicados no ambiente real.',
-          '3. Verificação de status pós-execução concluída com sucesso.',
-        ].join('\n');
+        throw new Error('execução real não implementada');
       } else {
         output = [
           `Proposta de execução SIMULADA (${agentLabel}):`,
@@ -167,7 +157,11 @@ export async function advanceMission(taskId: string, maxHops = 5) {
   for (let i = 0; i < maxHops; i++) {
     const mission = await getMission(taskId);
     if (!mission) break;
-    if (mission.task.status === 'done' || mission.task.status === 'failed') {
+    if (
+      mission.task.status === 'done' ||
+      mission.task.status === 'failed' ||
+      mission.task.status === 'rejected'
+    ) {
       logs.push({ stop: mission.task.status });
       break;
     }

@@ -35,6 +35,8 @@ export type Task = {
   status: 'pending' | 'in_progress' | 'done' | 'rejected' | 'failed';
   priority: 'low' | 'medium' | 'high';
   created_by: string;
+  result_summary?: string | null;
+  audit_markdown?: string | null;
   created_at: string;
   updated_at: string;
 };

@@ -19,13 +19,21 @@ export type CreateMissionInput = {
 };
 
 export function isChatAllowed(chatId: string | number): boolean {
+  const cleanId = String(chatId).trim().replace(/^telegram:/i, '');
+  if (cleanId === 'api') return true;
+
   const allowedStr = process.env.TELEGRAM_ALLOWED_CHAT_IDS;
-  if (!allowedStr || !allowedStr.trim()) return true;
+  if (!allowedStr || !allowedStr.trim()) {
+    if (process.env.NODE_ENV === 'production') {
+      console.warn('[auth] Fail closed: TELEGRAM_ALLOWED_CHAT_IDS is not set in production');
+      return false;
+    }
+    return true;
+  }
   const allowed = allowedStr
     .split(',')
     .map((s) => s.trim().replace(/^telegram:/i, ''))
     .filter(Boolean);
-  const cleanId = String(chatId).trim().replace(/^telegram:/i, '');
   return allowed.includes(cleanId);
 }
 
@@ -141,7 +149,7 @@ export async function completeStep(opts: {
   const step = mission.steps.find((s: any) => s.step_index === idx);
   if (!step) throw new Error('Step not found');
 
-  if (step.requires_approval && step.status !== 'approved' && step.status !== 'running') {
+  if (step.requires_approval && step.status !== 'approved') {
     if (step.status !== 'awaiting_approval') {
       await sql`
         UPDATE task_steps SET status = 'awaiting_approval', output = ${opts.output}, started_at = COALESCE(started_at, NOW())

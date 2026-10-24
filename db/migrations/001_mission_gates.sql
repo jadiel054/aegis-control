@@ -22,9 +22,16 @@ CREATE TABLE IF NOT EXISTS public.tasks (
     status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'in_progress', 'done', 'rejected', 'failed')),
     priority TEXT NOT NULL DEFAULT 'medium' CHECK (priority IN ('low', 'medium', 'high')),
     created_by TEXT NOT NULL DEFAULT 'system',
+    audit_markdown TEXT,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
+
+-- Active, idempotent migrations for existing Postgres/Neon databases:
+ALTER TABLE public.tasks ADD COLUMN IF NOT EXISTS audit_markdown TEXT;
+
+ALTER TABLE public.tasks DROP CONSTRAINT IF EXISTS tasks_status_check;
+ALTER TABLE public.tasks ADD CONSTRAINT tasks_status_check CHECK (status IN ('pending', 'in_progress', 'done', 'rejected', 'failed'));
 
 -- 2b. Create table 'task_steps'
 CREATE TABLE IF NOT EXISTS public.task_steps (
@@ -46,10 +53,13 @@ CREATE TABLE IF NOT EXISTS public.task_steps (
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
--- Migration snippet for existing databases:
--- ALTER TABLE public.tasks DROP CONSTRAINT IF EXISTS tasks_status_check;
--- ALTER TABLE public.tasks ADD CONSTRAINT tasks_status_check CHECK (status IN ('pending', 'in_progress', 'done', 'rejected', 'failed'));
--- ALTER TABLE public.task_steps ADD COLUMN IF NOT EXISTS execution_mode TEXT NOT NULL DEFAULT 'simulated';
+ALTER TABLE public.task_steps ADD COLUMN IF NOT EXISTS execution_mode TEXT NOT NULL DEFAULT 'simulated';
+
+ALTER TABLE public.task_steps DROP CONSTRAINT IF EXISTS task_steps_status_check;
+ALTER TABLE public.task_steps ADD CONSTRAINT task_steps_status_check CHECK (status IN ('pending', 'ready', 'running', 'awaiting_approval', 'approved', 'done', 'rejected', 'failed'));
+
+ALTER TABLE public.task_steps DROP CONSTRAINT IF EXISTS task_steps_execution_mode_check;
+ALTER TABLE public.task_steps ADD CONSTRAINT task_steps_execution_mode_check CHECK (execution_mode IN ('real', 'simulated'));
 
 -- 3. Create table 'commands'
 CREATE TABLE IF NOT EXISTS public.commands (

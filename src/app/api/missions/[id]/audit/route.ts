@@ -6,18 +6,7 @@ import { getMission } from '@/lib/dispatcher';
 export const runtime = 'nodejs';
 
 /** GET: download markdown body. POST: send audit doc to Telegram. */
-function checkApiKey(req: Request): boolean {
-  const expectedKey = process.env.AEGIS_API_KEY;
-  if (!expectedKey) return true; // If key is not set, allow access
-  const authHeader = req.headers.get('authorization');
-  const xApiKey = req.headers.get('x-api-key');
-  if (xApiKey === expectedKey) return true;
-  if (authHeader) {
-    const token = authHeader.startsWith('Bearer ') ? authHeader.slice(7).trim() : authHeader.trim();
-    if (token === expectedKey) return true;
-  }
-  return false;
-}
+import { checkApiKey } from '@/lib/api-auth';
 
 /** GET: download markdown body. POST: send audit doc to Telegram. */
 export async function GET(

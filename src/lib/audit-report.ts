@@ -18,8 +18,7 @@ export function cleanHtmlForMarkdown(text: string): string {
     .replace(/<b>(.*?)<\/b>/gi, '**$1**')
     .replace(/<i>(.*?)<\/i>/gi, '*$1*')
     .replace(/<code>(.*?)<\/code>/gi, '`$1`')
-    .replace(/<pre>([\s\S]*?)<\/pre>/gi, '```\n$1\n```')
-    .replace(/<[^>]+>/g, '');
+    .replace(/<pre>([\s\S]*?)<\/pre>/gi, '```\n$1\n```');
 }
 
 export function buildAuditMarkdown(mission: {
@@ -105,7 +104,7 @@ export async function deliverMissionAudit(taskId: string) {
 
   // Save report text on task for panel/API first so it's recorded even if send fails
   await sql`
-    UPDATE tasks SET result_summary = ${md.slice(0, 50000)}, updated_at = NOW()
+    UPDATE tasks SET audit_markdown = ${md.slice(0, 50000)}, updated_at = NOW()
     WHERE id = ${taskId}
   `;
 
