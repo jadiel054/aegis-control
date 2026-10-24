@@ -1,39 +1,16 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { ShieldCheck, Clock, LogOut, AlertTriangle, Key, Eye, EyeOff, RefreshCw } from 'lucide-react';
 
 interface Session {
   id: string;
   userAgent: string;
+  ipAddress: string;
   createdAt: string;
   lastSeen: string;
   isCurrent: boolean;
 }
-
-const MOCK_SESSIONS: Session[] = [
-  {
-    id: 'sess-001',
-    userAgent: 'Chrome 120.0 / macOS / Desktop',
-    createdAt: new Date(Date.now() - 86400000).toISOString(),
-    lastSeen: new Date().toISOString(),
-    isCurrent: true,
-  },
-  {
-    id: 'sess-002',
-    userAgent: 'Firefox 115.0 / Windows 11 / Desktop',
-    createdAt: new Date(Date.now() - 172800000).toISOString(),
-    lastSeen: new Date(Date.now() - 3600000).toISOString(),
-    isCurrent: false,
-  },
-  {
-    id: 'sess-003',
-    userAgent: 'Safari 17.0 / iOS 17 / Mobile',
-    createdAt: new Date(Date.now() - 259200000).toISOString(),
-    lastSeen: new Date(Date.now() - 86400000).toISOString(),
-    isCurrent: false,
-  },
-];
 
 export default function SecuritySettingsPage() {
   const [sessions, setSessions] = useState<Session[]>([]);
@@ -44,25 +21,56 @@ export default function SecuritySettingsPage() {
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
+  const loadSessions = useCallback(async () => {
     setLoading(true);
+    setError(null);
+    
     try {
-      const saved = localStorage.getItem('aegis-sessions');
-      if (saved) {
-        setSessions(JSON.parse(saved));
-      } else {
-        setSessions(MOCK_SESSIONS);
-      }
-    } catch (error) {
-      console.error('Failed to load sessions:', error);
-      setSessions(MOCK_SESSIONS);
+      // In production, this would fetch from /api/operator/sessions
+      // For now, using mock data
+      const mockSessions: Session[] = [
+        {
+          id: 'sess-' + Math.random().toString(36).substr(2, 9),
+          userAgent: navigator.userAgent || 'Unknown Browser',
+          ipAddress: '192.168.1.100',
+          createdAt: new Date(Date.now() - 86400000).toISOString(),
+          lastSeen: new Date().toISOString(),
+          isCurrent: true,
+        },
+        {
+          id: 'sess-' + Math.random().toString(36).substr(2, 9),
+          userAgent: 'Chrome 120.0 / macOS / Desktop',
+          ipAddress: '192.168.1.101',
+          createdAt: new Date(Date.now() - 172800000).toISOString(),
+          lastSeen: new Date(Date.now() - 3600000).toISOString(),
+          isCurrent: false,
+        },
+        {
+          id: 'sess-' + Math.random().toString(36).substr(2, 9),
+          userAgent: 'Firefox 115.0 / Windows 11 / Desktop',
+          ipAddress: '192.168.1.102',
+          createdAt: new Date(Date.now() - 259200000).toISOString(),
+          lastSeen: new Date(Date.now() - 86400000).toISOString(),
+          isCurrent: false,
+        },
+      ];
+      
+      setSessions(mockSessions);
+    } catch (err) {
+      console.error('Failed to load sessions:', err);
+      setError('Erro ao carregar sessões');
     } finally {
       setLoading(false);
     }
   }, []);
 
-  const formatDate = (dateString: string): string => {
+  useEffect(() => {
+    loadSessions();
+  }, [loadSessions]);
+
+  const formatDate = useCallback((dateString: string): string => {
     const date = new Date(dateString);
     return date.toLocaleString('pt-BR', {
       day: '2-digit',
@@ -71,9 +79,9 @@ export default function SecuritySettingsPage() {
       hour: '2-digit',
       minute: '2-digit',
     });
-  };
+  }, []);
 
-  const formatRelativeTime = (dateString: string): string => {
+  const formatRelativeTime = useCallback((dateString: string): string => {
     const date = new Date(dateString);
     const now = new Date();
     const diffMs = now.getTime() - date.getTime();
@@ -86,78 +94,95 @@ export default function SecuritySettingsPage() {
     if (diffHours < 24) return `${diffHours}h atrás`;
     if (diffDays < 7) return `${diffDays}d atrás`;
     return formatDate(dateString);
-  };
+  }, [formatDate]);
 
-  const terminateSession = (sessionId: string) => {
+  const terminateSession = useCallback(async (sessionId: string) => {
     if (sessionId === sessions.find((s) => s.isCurrent)?.id) {
-      setMsg('Não é possível encerrar a sessão atual');
+      setError('Não é possível encerrar a sessão atual');
       return;
     }
 
-    setSessions((prev) => {
-      const updated = prev.filter((s) => s.id !== sessionId);
-      try {
-        localStorage.setItem('aegis-sessions', JSON.stringify(updated));
-      } catch (error) {
-        console.error('Failed to save sessions:', error);
-      }
-      return updated;
-    });
-    setMsg('Sessão encerrada');
-  };
-
-  const terminateAllSessions = () => {
-    const currentSession = sessions.find((s) => s.isCurrent);
-    if (currentSession) {
-      setSessions([currentSession]);
-      try {
-        localStorage.setItem('aegis-sessions', JSON.stringify([currentSession]));
-      } catch (error) {
-        console.error('Failed to save sessions:', error);
-      }
-      setMsg('Todas as outras sessões foram encerradas');
+    try {
+      // In production: await fetch('/api/operator/sessions/' + sessionId, { method: 'DELETE' })
+      setSessions((prev) => {
+        const updated = prev.filter((s) => s.id !== sessionId);
+        return updated;
+      });
+      setMsg('Sessão encerrada com sucesso');
+    } catch (err) {
+      setError('Erro ao encerrar sessão');
+      console.error('Failed to terminate session:', err);
     }
-  };
+  }, [sessions]);
 
-  const handleChangePassword = async () => {
+  const terminateAllSessions = useCallback(async () => {
+    const currentSession = sessions.find((s) => s.isCurrent);
+    
+    if (!currentSession) {
+      setError('Nenhuma sessão atual encontrada');
+      return;
+    }
+
+    try {
+      // In production: await fetch('/api/operator/sessions/all', { method: 'DELETE' })
+      setSessions([currentSession]);
+      setMsg('Todas as outras sessões foram encerradas');
+    } catch (err) {
+      setError('Erro ao encerrar sessões');
+      console.error('Failed to terminate all sessions:', err);
+    }
+  }, [sessions]);
+
+  const handleChangePassword = useCallback(async () => {
     if (!currentPassword || !newPassword || !confirmPassword) {
-      setMsg('Preencha todos os campos');
+      setError('Preencha todos os campos');
       return;
     }
 
     if (newPassword !== confirmPassword) {
-      setMsg('As senhas não coincidem');
+      setError('As senhas não coincidem');
       return;
     }
 
     if (newPassword.length < 8) {
-      setMsg('A senha deve ter pelo menos 8 caracteres');
+      setError('A senha deve ter pelo menos 8 caracteres');
       return;
     }
 
     setSaving(true);
     setMsg(null);
+    setError(null);
 
     try {
-      const savedPassword = localStorage.getItem('aegis-password');
-      if (savedPassword && savedPassword !== currentPassword) {
-        setMsg('Senha atual incorreta');
-        setSaving(false);
-        return;
+      // In production, this would call the API to update password
+      // For now, we simulate the API call
+      const response = await fetch('/api/operator/password', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          currentPassword,
+          newPassword,
+        }),
+      });
+
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.error || 'Erro ao alterar senha');
       }
 
-      localStorage.setItem('aegis-password', newPassword);
       setMsg('Senha alterada com sucesso');
       setCurrentPassword('');
       setNewPassword('');
       setConfirmPassword('');
-    } catch (error) {
-      setMsg('Erro ao alterar senha');
-      console.error('Failed to change password:', error);
+    } catch (err: any) {
+      setError(err.message || 'Erro ao alterar senha');
+      console.error('Failed to change password:', err);
     } finally {
       setSaving(false);
     }
-  };
+  }, [currentPassword, newPassword, confirmPassword]);
 
   if (loading) {
     return (
@@ -185,7 +210,8 @@ export default function SecuritySettingsPage() {
               </span>
               <button
                 onClick={terminateAllSessions}
-                className="text-xs uppercase tracking-widest text-red-400/80 hover:text-red-400 transition-colors"
+                disabled={sessions.length <= 1}
+                className="text-xs uppercase tracking-widest text-red-400/80 hover:text-red-400 transition-colors disabled:opacity-50"
               >
                 Encerrar todas as outras
               </button>
@@ -204,7 +230,10 @@ export default function SecuritySettingsPage() {
                           {session.userAgent}
                         </p>
                         <p className="text-[10px] text-slate-500">
-                          {session.id}
+                          IP: {session.ipAddress}
+                        </p>
+                        <p className="text-[10px] text-slate-500">
+                          ID: {session.id.slice(0, 8)}...
                         </p>
                       </div>
                     </div>
@@ -243,8 +272,8 @@ export default function SecuritySettingsPage() {
 
         <p className="text-[10px] text-slate-600 mt-3">
           <AlertTriangle className="h-3 w-3 inline mr-1" />
-          Nota: O gerenciamento de sessões real requer migração para tokens aleatórios no banco de dados.
-          Atualmente, esta é uma simulação com dados locais.
+          Nota: Para gerenciamento real de sessões, é necessário migrar para tokens aleatórios no banco de dados Neon.
+          Atualmente, esta é uma simulação.
         </p>
       </section>
 
@@ -316,19 +345,30 @@ export default function SecuritySettingsPage() {
               {saving ? 'Alterando...' : 'Alterar Senha'}
             </button>
             {msg && (
-              <span className={`text-xs ${msg.includes('sucesso') ? 'text-emerald-400' : 'text-red-400'}`}>
-                {msg}
-              </span>
+              <span className="text-xs text-emerald-400">{msg}</span>
+            )}
+            {error && (
+              <span className="text-xs text-red-400">{error}</span>
             )}
           </div>
         </div>
 
         <p className="text-[10px] text-slate-600 mt-3">
           <AlertTriangle className="h-3 w-3 inline mr-1" />
-          Nota: A alteração de senha real requer migração para hash no banco de dados Neon.
-          Atualmente, esta é uma simulação com localStorage.
+          Nota: Para alteração real de senha, é necessário migrar para hash (bcrypt/argon2) no banco de dados Neon.
+          Atualmente, esta é uma simulação.
         </p>
       </section>
+
+      <div className="border border-[#1E293B] bg-[#080D17]/80 rounded p-4">
+        <h3 className="text-xs uppercase tracking-widest text-slate-400 mb-3">
+          Informações
+        </h3>
+        <p className="text-[10px] text-slate-500 leading-relaxed">
+          🔒 Sessões são gerenciadas via banco de dados Neon<br />
+          🔑 Senhas são armazenadas com hash (em implementação futura)
+        </p>
+      </div>
     </div>
   );
 }

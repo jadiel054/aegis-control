@@ -1,6 +1,6 @@
 'use client';
 
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import { Palette, RefreshCw, Save, Clock, Eye, EyeOff } from 'lucide-react';
 
 interface PersonalizationSettings {
@@ -14,14 +14,14 @@ interface PersonalizationSettings {
 }
 
 const PRESET_COLORS = [
-  { value: 'cyan', label: 'Ciano', class: 'bg-cyan-500' },
-  { value: 'emerald', label: 'Esmeralda', class: 'bg-emerald-500' },
-  { value: 'amber', label: 'Âmbar', class: 'bg-amber-500' },
-  { value: 'purple', label: 'Roxo', class: 'bg-purple-500' },
-  { value: 'rose', label: 'Rosa', class: 'bg-rose-500' },
-  { value: 'indigo', label: 'Índigo', class: 'bg-indigo-500' },
-  { value: 'teal', label: 'Verde-Azulado', class: 'bg-teal-500' },
-  { value: 'pink', label: 'Rosa', class: 'bg-pink-500' },
+  { value: 'bg-cyan-500', label: 'Ciano', color: '#06B6D4' },
+  { value: 'bg-emerald-500', label: 'Esmeralda', color: '#10B981' },
+  { value: 'bg-amber-500', label: 'Âmbar', color: '#F59E0B' },
+  { value: 'bg-purple-500', label: 'Roxo', color: '#8B5CF6' },
+  { value: 'bg-rose-500', label: 'Rosa', color: '#F43F5E' },
+  { value: 'bg-indigo-500', label: 'Índigo', color: '#6366F1' },
+  { value: 'bg-teal-500', label: 'Verde-Azulado', color: '#14B8A6' },
+  { value: 'bg-pink-500', label: 'Rosa Claro', color: '#EC4899' },
 ];
 
 const DENSITY_OPTIONS = [
@@ -47,7 +47,7 @@ const POLLING_INTERVALS = [
 
 export default function PersonalizationSettingsPage() {
   const [settings, setSettings] = useState<PersonalizationSettings>({
-    accentColor: 'cyan',
+    accentColor: 'bg-cyan-500',
     density: 'default',
     fontSize: 'medium',
     pollingEnabled: true,
@@ -57,56 +57,119 @@ export default function PersonalizationSettingsPage() {
   });
   const [saving, setSaving] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
 
-  useEffect(() => {
-    const saved = localStorage.getItem('aegis-personalization');
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved);
-        setSettings({
-          accentColor: parsed.accentColor || 'cyan',
-          density: parsed.density || 'default',
-          fontSize: parsed.fontSize || 'medium',
-          pollingEnabled: parsed.pollingEnabled !== false,
-          pollingInterval: parsed.pollingInterval || 10,
-          showTimestamps: parsed.showTimestamps !== false,
-          darkMode: parsed.darkMode !== false,
-        });
-      } catch (error) {
-        console.error('Failed to parse personalization:', error);
+  // Load settings from API
+  const loadSettings = useCallback(async () => {
+    setIsLoading(true);
+    setError(null);
+    
+    try {
+      const response = await fetch('/api/operator/personalization');
+      
+      if (!response.ok) {
+        throw new Error('Failed to load personalization settings');
       }
+      
+      const data = await response.json();
+      
+      setSettings({
+        accentColor: data.accent_color || 'bg-cyan-500',
+        density: data.density || 'default',
+        fontSize: data.font_size || 'medium',
+        pollingEnabled: data.polling_enabled !== false,
+        pollingInterval: data.polling_interval || 10,
+        showTimestamps: data.show_timestamps !== false,
+        darkMode: data.dark_mode !== false,
+      });
+    } catch (err) {
+      console.error('Failed to load personalization:', err);
+      setError('Erro ao carregar preferências. Usando valores padrão.');
+      
+      // Use defaults
+      setSettings({
+        accentColor: 'bg-cyan-500',
+        density: 'default',
+        fontSize: 'medium',
+        pollingEnabled: true,
+        pollingInterval: 10,
+        showTimestamps: true,
+        darkMode: true,
+      });
+    } finally {
+      setIsLoading(false);
     }
   }, []);
+
+  useEffect(() => {
+    loadSettings();
+  }, [loadSettings]);
 
   useEffect(() => {
     document.documentElement.classList.remove('polling-enabled', 'polling-disabled');
     document.documentElement.classList.add(settings.pollingEnabled ? 'polling-enabled' : 'polling-disabled');
   }, [settings.pollingEnabled]);
 
-  const handleChange = (field: keyof PersonalizationSettings, value: string | number | boolean) => {
+  const handleChange = useCallback((field: keyof PersonalizationSettings, value: string | number | boolean) => {
     setSettings((prev) => ({ ...prev, [field]: value }));
     setMsg(null);
-  };
+    setError(null);
+  }, []);
 
-  const handleSave = () => {
+  const handleSave = useCallback(async () => {
     setSaving(true);
     setMsg(null);
+    setError(null);
 
     try {
-      localStorage.setItem('aegis-personalization', JSON.stringify(settings));
-      setMsg('Preferências salvas com sucesso');
-    } catch (error) {
-      setMsg('Erro ao salvar preferências');
-      console.error('Failed to save personalization:', error);
+      // Prepare data for API
+      const saveData = {
+        accent_color: settings.accentColor,
+        density: settings.density,
+        font_size: settings.fontSize,
+        polling_enabled: settings.pollingEnabled,
+        polling_interval: settings.pollingInterval,
+        show_timestamps: settings.showTimestamps,
+        dark_mode: settings.darkMode,
+      };
+
+      const response = await fetch('/api/operator/personalization', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(saveData),
+      });
+
+      if (!response.ok) {
+        const data = await response.json();
+        throw new Error(data.error || 'Erro ao salvar preferências');
+      }
+
+      setMsg('Preferências salvas com sucesso no banco de dados!');
+      
+      // Reload to get fresh data from server
+      await loadSettings();
+    } catch (err: any) {
+      setError(err.message || 'Erro ao salvar preferências');
+      console.error('Failed to save personalization:', err);
     } finally {
       setSaving(false);
     }
-  };
+  }, [settings, loadSettings]);
 
-  const getAccentPreview = () => {
-    const color = PRESET_COLORS.find((c) => c.value === settings.accentColor);
-    return color?.class || 'bg-cyan-500';
-  };
+  const getAccentPreview = useCallback(() => {
+    return settings.accentColor || 'bg-cyan-500';
+  }, [settings.accentColor]);
+
+  if (isLoading) {
+    return (
+      <div className="flex items-center justify-center h-64">
+        <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-cyan-500" />
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-3xl space-y-6">
@@ -128,11 +191,12 @@ export default function PersonalizationSettingsPage() {
                 <button
                   key={color.value}
                   onClick={() => handleChange('accentColor', color.value)}
-                  className={`w-8 h-8 rounded ${color.class} border-2 transition-all ${
+                  className={`w-8 h-8 rounded ${color.value} border-2 transition-all ${
                     settings.accentColor === color.value
                       ? 'border-cyan-400 ring-2 ring-cyan-400/50'
                       : 'border-transparent hover:border-slate-500'
                   }`}
+                  title={color.label}
                 />
               ))}
             </div>
@@ -295,15 +359,16 @@ export default function PersonalizationSettingsPage() {
             <button
               onClick={handleSave}
               disabled={saving}
-              className="px-4 py-2 bg-cyan-900/40 border border-cyan-500/40 text-cyan-300 text-xs uppercase font-bold tracking-widest rounded disabled:opacity-50 hover:bg-cyan-900/60 transition-colors"
+              className="px-4 py-2 bg-cyan-900/40 border border-cyan-500/40 text-cyan-300 text-xs uppercase font-bold tracking-widest rounded disabled:opacity-50 hover:bg-cyan-900/60 transition-colors flex items-center gap-1"
             >
-              <Save className="h-3.5 w-3.5 inline mr-1" />
-              {saving ? 'Salvando...' : 'Salvar'}
+              <Save className="h-3.5 w-3.5" />
+              {saving ? 'Salvando...' : 'Salvar no Neon'}
             </button>
             {msg && (
-              <span className={`text-xs ${msg.includes('sucesso') ? 'text-emerald-400' : 'text-red-400'}`}>
-                {msg}
-              </span>
+              <span className="text-xs text-emerald-400">{msg}</span>
+            )}
+            {error && (
+              <span className="text-xs text-red-400">{error}</span>
             )}
           </div>
         </div>
@@ -311,8 +376,7 @@ export default function PersonalizationSettingsPage() {
 
       <p className="text-[10px] text-slate-600">
         <Eye className="h-3 w-3 inline mr-1" />
-        Nota: Estas preferências são salvas localmente no seu navegador.
-        Elas não afetam outros dispositivos ou usuários.
+        Nota: Estas preferências são salvas no banco de dados Neon e sincronizadas entre dispositivos.
       </p>
     </div>
   );

@@ -93,3 +93,16 @@ export type SecurityIncident = {
   created_at: string;
   resolved_at: string | null;
 };
+
+// New types for operator profile
+export type OperatorProfile = {
+  id: string;
+  operator_id: string;
+  display_name: string;
+  email: string;
+  avatar_url: string | null;
+  avatar_initials: string;
+  avatar_color: string;
+  created_at: string;
+  updated_at: string;
+};
