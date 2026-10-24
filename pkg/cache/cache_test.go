@@ -71,3 +71,25 @@ func TestGetPolicyReturnsDefensiveCopy(t *testing.T) {
 		t.Fatalf("mutating GetPolicy result changed cached policy: %+v", again)
 	}
 }
+
+func TestUpdatePoliciesCopiesInputSnapshot(t *testing.T) {
+	c := &PolicyCache{}
+	original := &Policy{ID: "p1", Allow: true}
+	input := map[string]*Policy{"p1": original}
+	c.UpdatePolicies(input)
+
+	original.ID = "mutated"
+	original.Allow = false
+	input["p2"] = &Policy{ID: "p2", Allow: true}
+
+	got, ok := c.GetPolicy("p1")
+	if !ok || got == nil {
+		t.Fatal("expected the published p1 snapshot to remain present")
+	}
+	if got.ID != "p1" || !got.Allow {
+		t.Fatalf("mutating input changed published snapshot: %+v", got)
+	}
+	if _, ok := c.GetPolicy("p2"); ok {
+		t.Fatal("adding to the input map changed the published snapshot")
+	}
+}
