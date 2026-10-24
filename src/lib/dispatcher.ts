@@ -223,10 +223,20 @@ export async function approveStep(taskId: string, approvedBy: string) {
   const sql = getSql();
   const mission = await getMission(taskId);
   if (!mission) throw new Error('Task not found');
+  
+  // Only reject if task is in rejectable state (pending or in_progress)
+  if (!['pending', 'in_progress'].includes(mission.task.status)) {
+    throw new Error(`Não é possível rejeitar: task está em estado '${mission.task.status}' (permitido: pending, in_progress)`);
+  }
+  
   const idx = mission.task.current_step ?? 0;
   const step = mission.steps.find((s: any) => s.step_index === idx);
   if (!step) throw new Error('Step not found');
 
+  // Only approve if current step is awaiting_approval
+  if (step.status !== 'awaiting_approval') {
+    throw new Error(`Não é possível aprovar: passo atual está em estado '${step.status}' (esperado: 'awaiting_approval')`);
+  }
   await sql`
     UPDATE task_steps SET status = 'approved', approved_at = NOW(), approved_by = ${approvedBy}
     WHERE id = ${step.id}
@@ -248,6 +258,12 @@ export async function rejectStep(taskId: string, reason: string, by: string) {
   const sql = getSql();
   const mission = await getMission(taskId);
   if (!mission) throw new Error('Task not found');
+  
+  // Only reject if task is in rejectable state (pending or in_progress)
+  if (!['pending', 'in_progress'].includes(mission.task.status)) {
+    throw new Error(`Não é possível rejeitar: task está em estado '${mission.task.status}' (permitido: pending, in_progress)`);
+  }
+  
   const idx = mission.task.current_step ?? 0;
   const step = mission.steps.find((s: any) => s.step_index === idx);
   if (step) {
