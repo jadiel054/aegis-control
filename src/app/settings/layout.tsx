@@ -22,7 +22,7 @@ const tabs: SettingsTab[] = [
 export default function SettingsLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const [activeTab, setActiveTab] = useState(() => {
-    const current = tabs.find((t) => pathname.startsWith(t.path));
+    const current = tabs.find((t) => pathname?.startsWith(t.path));
     return current?.id || 'profile';
   });
 
