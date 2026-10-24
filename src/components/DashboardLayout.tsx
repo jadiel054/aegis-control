@@ -48,6 +48,7 @@ export default function DashboardLayout({ children }: DashboardLayoutProps) {
   const navItems = [
     { name: 'Visão Geral', path: '/', icon: LayoutDashboard },
     { name: 'Config. Agentes', path: '/agents', icon: Settings2 },
+    { name: 'Quadro de Missões', path: '/missions', icon: ListTodo },
     { name: 'Quadro de Tarefas', path: '/tasks', icon: KanbanSquare },
     { name: 'Painel de Comandos', path: '/commands', icon: Terminal },
     { name: 'Feed em Tempo Real', path: '/messages', icon: Activity },

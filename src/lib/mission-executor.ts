@@ -50,28 +50,76 @@ export async function executeReadyStep(taskId: string, stepIndex?: number) {
 
   try {
     if (step.role === 'orchestrator' || /morpheus/i.test(agentLabel)) {
-      const brain = await jarvisReply({
-        userText: [
-          `Você é o agente ${agentLabel} (orquestrador) numa missão Aegis.`,
-          `Modo de execução do passo: ${execMode.toUpperCase()}.`,
-          `Tarefa: ${mission.task.title}`,
-          `Descrição: ${input}`,
-          '',
-          'Produza um PLANO curto em português:',
-          '1) objetivo',
-          '2) passos técnicos',
-          '3) riscos',
-          '4) o que o worker (Plutão) deve executar',
-          '5) o que a síntese (Zarith) deve entregar no fim',
-          'Seja objetivo (Telegram).',
-        ].join('\n'),
-      });
-      output =
-        brain?.text ||
-        `Plano bootstrap (${agentLabel}): analisar "${mission.task.title}" e preparar execução para o worker.`;
-    } else if (step.role === 'worker' || /plutao|plutão/i.test(agentLabel)) {
       if (execMode === 'real') {
-        throw new Error('execução real não implementada');
+        const morpheusUrl = process.env.MORPHEUS_API_URL || 'https://morpheus-app-5bmx.onrender.com';
+        const response = await fetch(`${morpheusUrl}/api/agent/execute`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': process.env.AEGIS_API_KEY || '',
+          },
+          body: JSON.stringify({
+            task_id: taskId,
+            step_index: idx,
+            input: input,
+            command: 'plan_real_mission',
+            mission_title: mission.task.title,
+            mission_description: mission.task.description,
+          }),
+        });
+        
+        if (!response.ok) {
+          throw new Error(`Morpheus API retornou erro: ${response.status}`);
+        }
+        
+        const data = await response.json();
+        output = data.output || data.plan || `Plano REAL gerado pelo Morpheus para: ${mission.task.title}`;
+      } else {
+        const brain = await jarvisReply({
+          userText: [
+            `Você é o agente ${agentLabel} (orquestrador) numa missão Aegis.`,
+            `Modo de execução do passo: ${execMode.toUpperCase()}.`,
+            `Tarefa: ${mission.task.title}`,
+            `Descrição: ${input}`,
+            '',
+            'Produza um PLANO curto em português:',
+            '1) objetivo',
+            '2) passos técnicos',
+            '3) riscos',
+            '4) o que o worker (Plutão) deve executar',
+            '5) o que a síntese (Zarith) deve entregar no fim',
+            'Seja objetivo (Telegram).',
+          ].join('\n'),
+        });
+        output =
+          brain?.text ||
+          `Plano bootstrap (${agentLabel}): analisar "${mission.task.title}" e preparar execução para o worker.`;
+      } else if (step.role === 'worker' || /plutao|plutão/i.test(agentLabel)) {
+      if (execMode === 'real') {
+        // Call Plutao API for real execution
+        const plutaoUrl = process.env.PLUTAO_API_URL || 'https://plutao-os.vercel.app';
+        const response = await fetch(`${plutaoUrl}/api/agent/execute`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': process.env.AEGIS_API_KEY || '',
+          },
+          body: JSON.stringify({
+            task_id: taskId,
+            step_index: idx,
+            input: input,
+            command: 'execute_real',
+            mission_title: mission.task.title,
+            mission_context: mission.task.description,
+          }),
+        });
+        
+        if (!response.ok) {
+          throw new Error(`Plutão API retornou erro: ${response.status}`);
+        }
+        
+        const data = await response.json();
+        output = data.output || data.result || `Execução REAL concluída pelo Plutão para: ${mission.task.title}`;
       } else {
         output = [
           `Proposta de execução SIMULADA (${agentLabel}):`,
@@ -89,28 +137,62 @@ export async function executeReadyStep(taskId: string, stepIndex?: number) {
       }
     } else {
       // Zarith / synthesis step
-      const previousStepsContext = mission.steps
-        .filter((s: any) => s.step_index < idx)
-        .map(
-          (s: any) =>
-            `Passo ${s.step_index} [${s.agent_name || s.role}] (${(s.execution_mode || 'simulated').toUpperCase()}): ${s.output || '(sem output)'}`
-        )
-        .join('\n---\n');
+      if (execMode === 'real') {
+        const zarithUrl = process.env.ZARITH_API_URL || 'https://zarith-api-server.onrender.com';
+        const previousStepsContext = mission.steps
+          .filter((s: any) => s.step_index < idx)
+          .map(
+            (s: any) =>
+              `Passo ${s.step_index} [${s.agent_name || s.role}] (${(s.execution_mode || 'simulated').toUpperCase()}): ${s.output || '(sem output)'}`
+          )
+          .join('\n---\n');
+        
+        const response = await fetch(`${zarithUrl}/api/agent/execute`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-api-key': process.env.AEGIS_API_KEY || '',
+          },
+          body: JSON.stringify({
+            task_id: taskId,
+            step_index: idx,
+            input: input,
+            command: 'synthesize_real',
+            mission_title: mission.task.title,
+            previous_steps: previousStepsContext,
+          }),
+        });
+        
+        if (!response.ok) {
+          throw new Error(`Zarith API retornou erro: ${response.status}`);
+        }
+        
+        const data = await response.json();
+        output = data.output || data.synthesis || `Síntese REAL gerada pelo Zarith para: ${mission.task.title}`;
+      } else {
+        const previousStepsContext = mission.steps
+          .filter((s: any) => s.step_index < idx)
+          .map(
+            (s: any) =>
+              `Passo ${s.step_index} [${s.agent_name || s.role}] (${(s.execution_mode || 'simulated').toUpperCase()}): ${s.output || '(sem output)'}`
+          )
+          .join('\n---\n');
 
-      const brain = await jarvisReply({
-        userText: [
-          `Você é ${agentLabel} (síntese / relatório final da missão).`,
-          `REGRA ABSOLUTA: Resuma SOMENTE o que foi registrado nos outputs dos passos anteriores. É ESTRITAMENTE PROIBIDO afirmar qualquer ação, gravação, script ou alteração que não esteja explicitamente descrita nos outputs fornecidos abaixo.`,
-          `Missão: ${mission.task.title}`,
-          `Histórico real de execução dos passos anteriores:`,
-          previousStepsContext.slice(0, 4000),
-          '',
-          'Escreva uma síntese objetiva em português baseada EXCLUSIVAMENTE nos fatos acima, indicando o modo de execução (REAL ou SIMULADO) de cada passo.',
-        ].join('\n'),
-      });
-      output =
-        brain?.text ||
-        `Síntese (${agentLabel}): missão "${mission.task.title}" processada. Resumo baseado exclusivamente no histórico registrado dos passos anteriores.`;
+        const brain = await jarvisReply({
+          userText: [
+            `Você é ${agentLabel} (síntese / relatório final da missão).`,
+            `REGRA ABSOLUTA: Resuma SOMENTE o que foi registrado nos outputs dos passos anteriores. É ESTRITAMENTE PROIBIDO afirmar qualquer ação, gravação, script ou alteração que não esteja explicitamente descrita nos outputs fornecidos abaixo.`,
+            `Missão: ${mission.task.title}`,
+            `Histórico real de execução dos passos anteriores:`,
+            previousStepsContext.slice(0, 4000),
+            '',
+            'Escreva uma síntese objetiva em português baseada EXCLUSIVAMENTE nos fatos acima, indicando o modo de execução (REAL ou SIMULADO) de cada passo.',
+          ].join('\n'),
+        });
+        output =
+          brain?.text ||
+          `Síntese (${agentLabel}): missão "${mission.task.title}" processada. Resumo baseado exclusivamente no histórico registrado dos passos anteriores.`;
+      }
     }
 
     // completeStep handles approval gate + handoff

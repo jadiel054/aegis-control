@@ -34,8 +34,10 @@ export class AegisAgent {
     AegisConfig;
   private heartbeatTimer?: ReturnType<typeof setInterval>;
   private commandTimer?: ReturnType<typeof setInterval>;
+  private stepsTimer?: ReturnType<typeof setInterval>;
   private agentId?: string;
   private seenCommands = new Set<string>();
+  private seenSteps = new Set<string>();
 
   constructor(cfg: AegisConfig) {
     if (!cfg.baseUrl || !cfg.agentName) {
@@ -102,7 +104,6 @@ export class AegisAgent {
 
   async pollCommands(): Promise<AegisCommand[]> {
     if (!this.agentId) {
-      // ensure we have an id via heartbeat first
       await this.heartbeat('online');
     }
     const url = `${this.cfg.baseUrl}/api/commands?agent_id=${this.agentId}&status=pending`;
@@ -111,6 +112,44 @@ export class AegisAgent {
     const data = await res.json();
     const commands: AegisCommand[] = data.commands || [];
     return commands.filter((c) => !this.seenCommands.has(c.id));
+  }
+
+  async pollReadySteps(): Promise<Array<{ taskId: string; step: any }>> {
+    if (!this.agentId) {
+      await this.heartbeat('online');
+    }
+    const url = `${this.cfg.baseUrl}/api/agent/steps/ready?agent_id=${this.agentId}`;
+    const res = await fetch(url, {
+      headers: {
+        'x-api-key': process.env.AEGIS_API_KEY || '',
+      },
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    return data.readySteps || [];
+  }
+
+  async executeStep(opts: {
+    taskId: string;
+    stepIndex: number;
+    output: string;
+  }) {
+    const url = `${this.cfg.baseUrl}/api/missions/step/complete`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'x-api-key': process.env.AEGIS_API_KEY || '',
+      },
+      body: JSON.stringify({
+        taskId: opts.taskId,
+        stepIndex: opts.stepIndex,
+        output: opts.output,
+        agentName: this.cfg.agentName,
+      }),
+    });
+    if (!res.ok) throw new Error(`Failed to complete step: ${res.status}`);
+    return res.json();
   }
 
   start() {
@@ -122,7 +161,7 @@ export class AegisAgent {
       }
     };
 
-    const poll = async () => {
+    const pollCommands = async () => {
       try {
         const cmds = await this.pollCommands();
         for (const cmd of cmds) {
@@ -136,15 +175,39 @@ export class AegisAgent {
       }
     };
 
+    const pollSteps = async () => {
+      try {
+        const readySteps = await this.pollReadySteps();
+        for (const { taskId, step } of readySteps) {
+          if (this.cfg.onCommand) {
+            await this.cfg.onCommand({
+              id: `${taskId}-${step.step_index}`,
+              agent_id: this.agentId || '',
+              command_type: 'execute_step',
+              payload: { taskId, step },
+              status: 'pending',
+              issued_by: 'aegis',
+              created_at: new Date().toISOString(),
+            });
+          }
+        }
+      } catch (e) {
+        console.warn('[AegisAgent] steps poll error', e);
+      }
+    };
+
     void beat();
-    void poll();
+    void pollCommands();
+    void pollSteps();
     this.heartbeatTimer = setInterval(beat, this.cfg.heartbeatIntervalMs!);
-    this.commandTimer = setInterval(poll, this.cfg.commandPollIntervalMs!);
+    this.commandTimer = setInterval(pollCommands, this.cfg.commandPollIntervalMs!);
+    this.stepsTimer = setInterval(pollSteps, this.cfg.commandPollIntervalMs!);
   }
 
   stop() {
     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
     if (this.commandTimer) clearInterval(this.commandTimer);
+    if (this.stepsTimer) clearInterval(this.stepsTimer);
   }
 }
 

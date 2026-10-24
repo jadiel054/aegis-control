@@ -129,24 +129,9 @@ CREATE POLICY "Allow all public read/write to agent_dispatch_messages" ON public
 CREATE POLICY "Allow all public read/write to security_incidents" ON public.security_incidents FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "Allow all public read/write to test_runs" ON public.test_runs FOR ALL USING (true) WITH CHECK (true);
 
--- Enable Realtime publication
-BEGIN;
-  -- Remove tables if they are already in the publication to avoid errors
-  ALTER PUBLICATION supabase_realtime DROP TABLE IF EXISTS public.agents;
-  ALTER PUBLICATION supabase_realtime DROP TABLE IF EXISTS public.tasks;
-  ALTER PUBLICATION supabase_realtime DROP TABLE IF EXISTS public.commands;
-  ALTER PUBLICATION supabase_realtime DROP TABLE IF EXISTS public.agent_dispatch_messages;
-  ALTER PUBLICATION supabase_realtime DROP TABLE IF EXISTS public.security_incidents;
-  ALTER PUBLICATION supabase_realtime DROP TABLE IF EXISTS public.test_runs;
-
-  -- Add tables to the publication
-  ALTER PUBLICATION supabase_realtime ADD TABLE public.agents;
-  ALTER PUBLICATION supabase_realtime ADD TABLE public.tasks;
-  ALTER PUBLICATION supabase_realtime ADD TABLE public.commands;
-  ALTER PUBLICATION supabase_realtime ADD TABLE public.agent_dispatch_messages;
-  ALTER PUBLICATION supabase_realtime ADD TABLE public.security_incidents;
-  ALTER PUBLICATION supabase_realtime ADD TABLE public.test_runs;
-COMMIT;
+-- Skip Realtime publication for Neon (Neon does not support Supabase Realtime)
+-- Neon uses HTTP polling instead of WebSocket-based realtime
+-- This migration is now Neon-compatible
 
 -- Seed initial agents
 INSERT INTO public.agents (name, role, status, webhook_url, last_heartbeat)
