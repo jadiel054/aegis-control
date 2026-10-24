@@ -1,8 +1,11 @@
 package cache
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -120,5 +123,64 @@ func TestPolicyDeniesWhenEffectOrPolicyValidityDoesNotAllow(t *testing.T) {
 		if d.Allowed {
 			t.Fatalf("effect %s / expired policy must deny: %+v", effect, d)
 		}
+	}
+}
+
+func TestSharedAuthorizationFixtures(t *testing.T) {
+	var fixtures []struct {
+		Name               string    `json:"name"`
+		Now                time.Time `json:"now"`
+		SnapshotValidUntil time.Time `json:"snapshot_valid_until"`
+		Request            struct {
+			TenantID    string `json:"tenant_id"`
+			PrincipalID string `json:"principal_id"`
+			Action      string `json:"action"`
+			Resource    string `json:"resource"`
+		} `json:"request"`
+		Policies []Policy `json:"policies"`
+		Expected struct {
+			Decision string `json:"decision"`
+			Reason   string `json:"reason"`
+			PolicyID string `json:"policy_id"`
+		} `json:"expected"`
+	}
+
+	fixturePath := filepath.Join("..", "..", "tests", "fixtures", "authorization-policy-cases.json")
+	data, err := os.ReadFile(fixturePath)
+	if err != nil {
+		t.Fatalf("read shared authorization fixtures: %v", err)
+	}
+	if err := json.Unmarshal(data, &fixtures); err != nil {
+		t.Fatalf("decode shared authorization fixtures: %v", err)
+	}
+	if len(fixtures) == 0 {
+		t.Fatal("shared authorization fixtures must not be empty")
+	}
+
+	for _, fixture := range fixtures {
+		t.Run(fixture.Name, func(t *testing.T) {
+			policyCache := &PolicyCache{}
+			err := policyCache.ReplaceSnapshot(Snapshot{
+				SchemaVersion: 1,
+				Revision:      "sha256:shared-fixtures",
+				GeneratedAt:   fixture.Now.Add(-time.Minute),
+				ValidUntil:    fixture.SnapshotValidUntil,
+				Policies:      fixture.Policies,
+			})
+			if err != nil {
+				t.Fatalf("publish fixture snapshot: %v", err)
+			}
+
+			decision := policyCache.Evaluate(Request{
+				TenantID:    fixture.Request.TenantID,
+				PrincipalID: fixture.Request.PrincipalID,
+				Action:      fixture.Request.Action,
+				Resource:    fixture.Request.Resource,
+			}, fixture.Now)
+			wantAllowed := fixture.Expected.Decision == "ALLOW"
+			if decision.Allowed != wantAllowed || decision.Reason != fixture.Expected.Reason || decision.PolicyID != fixture.Expected.PolicyID {
+				t.Fatalf("got decision %+v; want decision=%s reason=%s policy_id=%s", decision, fixture.Expected.Decision, fixture.Expected.Reason, fixture.Expected.PolicyID)
+			}
+		})
 	}
 }

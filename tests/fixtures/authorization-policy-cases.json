@@ -1,0 +1,142 @@
+[
+  {
+    "name": "allow-exact-active-match",
+    "now": "2026-10-24T12:00:00Z",
+    "snapshot_valid_until": "2026-10-24T12:05:00Z",
+    "request": {
+      "tenant_id": "tenant-a",
+      "principal_id": "agent-allow",
+      "action": "mission.execute",
+      "resource": "mission/allow"
+    },
+    "policies": [
+      {
+        "policy_id": "policy-allow",
+        "tenant_id": "tenant-a",
+        "principal_id": "agent-allow",
+        "action": "mission.execute",
+        "resource": "mission/allow",
+        "effect": "ALLOW",
+        "valid_from": "2026-10-24T11:00:00Z",
+        "valid_until": null
+      }
+    ],
+    "expected": {
+      "decision": "ALLOW",
+      "reason": "ALLOW",
+      "policy_id": "policy-allow"
+    }
+  },
+  {
+    "name": "explicit-deny",
+    "now": "2026-10-24T12:00:00Z",
+    "snapshot_valid_until": "2026-10-24T12:05:00Z",
+    "request": {
+      "tenant_id": "tenant-a",
+      "principal_id": "agent-deny",
+      "action": "mission.execute",
+      "resource": "mission/deny"
+    },
+    "policies": [
+      {
+        "policy_id": "policy-deny",
+        "tenant_id": "tenant-a",
+        "principal_id": "agent-deny",
+        "action": "mission.execute",
+        "resource": "mission/deny",
+        "effect": "DENY",
+        "valid_from": "2026-10-24T11:00:00Z",
+        "valid_until": null
+      }
+    ],
+    "expected": {
+      "decision": "DENY",
+      "reason": "POLICY_DENIED",
+      "policy_id": "policy-deny"
+    }
+  },
+  {
+    "name": "missing-exact-match",
+    "now": "2026-10-24T12:00:00Z",
+    "snapshot_valid_until": "2026-10-24T12:05:00Z",
+    "request": {
+      "tenant_id": "tenant-b",
+      "principal_id": "agent-allow",
+      "action": "mission.execute",
+      "resource": "mission/allow"
+    },
+    "policies": [
+      {
+        "policy_id": "policy-other-tenant",
+        "tenant_id": "tenant-a",
+        "principal_id": "agent-allow",
+        "action": "mission.execute",
+        "resource": "mission/allow",
+        "effect": "ALLOW",
+        "valid_from": "2026-10-24T11:00:00Z",
+        "valid_until": null
+      }
+    ],
+    "expected": {
+      "decision": "DENY",
+      "reason": "POLICY_NOT_FOUND",
+      "policy_id": ""
+    }
+  },
+  {
+    "name": "not-yet-active",
+    "now": "2026-10-24T12:00:00Z",
+    "snapshot_valid_until": "2026-10-24T12:05:00Z",
+    "request": {
+      "tenant_id": "tenant-a",
+      "principal_id": "agent-future",
+      "action": "mission.execute",
+      "resource": "mission/future"
+    },
+    "policies": [
+      {
+        "policy_id": "policy-future",
+        "tenant_id": "tenant-a",
+        "principal_id": "agent-future",
+        "action": "mission.execute",
+        "resource": "mission/future",
+        "effect": "ALLOW",
+        "valid_from": "2026-10-24T12:01:00Z",
+        "valid_until": null
+      }
+    ],
+    "expected": {
+      "decision": "DENY",
+      "reason": "POLICY_NOT_ACTIVE",
+      "policy_id": "policy-future"
+    }
+  },
+  {
+    "name": "expired-policy",
+    "now": "2026-10-24T12:00:00Z",
+    "snapshot_valid_until": "2026-10-24T12:05:00Z",
+    "request": {
+      "tenant_id": "tenant-a",
+      "principal_id": "agent-expired",
+      "action": "mission.execute",
+      "resource": "mission/expired"
+    },
+    "policies": [
+      {
+        "policy_id": "policy-expired",
+        "tenant_id": "tenant-a",
+        "principal_id": "agent-expired",
+        "action": "mission.execute",
+        "resource": "mission/expired",
+        "effect": "ALLOW",
+        "valid_from": "2026-10-24T11:00:00Z",
+        "valid_until": "2026-10-24T11:59:59Z"
+      }
+    ],
+    "expected": {
+      "decision": "DENY",
+      "reason": "POLICY_EXPIRED",
+      "policy_id": "policy-expired"
+    }
+  }
+]
