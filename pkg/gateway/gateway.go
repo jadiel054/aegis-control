@@ -19,6 +19,7 @@ var (
 	ErrNilTask           = errors.New("worker pool task must not be nil")
 	ErrNilPolicyCache    = errors.New("policy cache must not be nil")
 	ErrNilContext        = errors.New("context must not be nil")
+	ErrInvalidTimeout    = errors.New("timeout must be greater than zero")
 )
 
 // WorkerPool limits goroutines handling downstream requests.
@@ -33,10 +34,7 @@ func NewWorkerPool(workers int, queueSize int) (*WorkerPool, error) {
 	if workers <= 0 || queueSize < 0 {
 		return nil, ErrInvalidPoolConfig
 	}
-
-	pool := &WorkerPool{
-		tasks: make(chan func(), queueSize),
-	}
+	pool := &WorkerPool{tasks: make(chan func(), queueSize)}
 	for i := 0; i < workers; i++ {
 		pool.wg.Add(1)
 		go func() {
@@ -55,13 +53,11 @@ func (wp *WorkerPool) Submit(task func()) error {
 	if task == nil {
 		return ErrNilTask
 	}
-
 	wp.mu.Lock()
 	defer wp.mu.Unlock()
 	if wp.stopped {
 		return ErrPoolStopped
 	}
-
 	select {
 	case wp.tasks <- task:
 		return nil
@@ -82,8 +78,7 @@ func (wp *WorkerPool) Stop() {
 	wp.wg.Wait()
 }
 
-// AgentGatewayHandler evaluates incoming requests with a context timeout and
-// a fail-closed local-policy fallback.
+// AgentGatewayHandler evaluates requests against the immutable local cache.
 type AgentGatewayHandler struct {
 	pool        *WorkerPool
 	cache       *cache.PolicyCache
@@ -99,11 +94,7 @@ func NewAgentGatewayHandler(workers, queueSize int, policyCache *cache.PolicyCac
 	if err != nil {
 		return nil, err
 	}
-	return &AgentGatewayHandler{
-		pool:        pool,
-		cache:       policyCache,
-		isConnAlive: true,
-	}, nil
+	return &AgentGatewayHandler{pool: pool, cache: policyCache, isConnAlive: true}, nil
 }
 
 func (h *AgentGatewayHandler) SetConnectionState(alive bool) {
@@ -118,45 +109,37 @@ func (h *AgentGatewayHandler) IsConnectionAlive() bool {
 	return h.isConnAlive
 }
 
-// EvaluateAccess evaluates access with a timeout. A context cancellation or
-// deadline that is visible when the result is received takes precedence over
-// the policy result.
+// EvaluateAccess retains the original policy-ID API for existing consumers.
 func (h *AgentGatewayHandler) EvaluateAccess(ctx context.Context, policyID string, timeout time.Duration) (bool, error) {
 	if ctx == nil {
 		return false, ErrNilContext
 	}
-
 	ctxTimeout, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	if err := ctxTimeout.Err(); err != nil {
 		return false, err
 	}
-
 	type result struct {
 		allow bool
 		err   error
 	}
 	resChan := make(chan result, 1)
-
 	err := h.pool.Submit(func() {
 		if err := ctxTimeout.Err(); err != nil {
-			resChan <- result{allow: false, err: err}
+			resChan <- result{err: err}
 			return
 		}
-
-		// A decisão vem sempre do cache local. Em partição, uma política
-		// ausente é negada, nunca tratada como uma permissão transitória.
 		policy, exists := h.cache.GetPolicy(policyID)
 		if !exists || policy == nil {
 			if h.IsConnectionAlive() {
-				resChan <- result{allow: false, err: ErrPolicyNotFound}
-			} else {
-				resChan <- result{allow: false, err: ErrAccessDenied}
+				resChan <- result{err: ErrPolicyNotFound}
+				return
 			}
+			resChan <- result{err: ErrAccessDenied}
 			return
 		}
 		if !policy.Allow {
-			resChan <- result{allow: false, err: ErrAccessDenied}
+			resChan <- result{err: ErrAccessDenied}
 			return
 		}
 		resChan <- result{allow: true}
@@ -167,7 +150,6 @@ func (h *AgentGatewayHandler) EvaluateAccess(ctx context.Context, policyID strin
 		}
 		return false, err
 	}
-
 	select {
 	case <-ctxTimeout.Done():
 		return false, ctxTimeout.Err()
@@ -176,6 +158,54 @@ func (h *AgentGatewayHandler) EvaluateAccess(ctx context.Context, policyID strin
 			return false, err
 		}
 		return res.allow, res.err
+	}
+}
+
+// EvaluateRequest evaluates an exact-match request through the bounded worker
+// pool. Policy denials are decisions; overload and deadline failures are errors.
+func (h *AgentGatewayHandler) EvaluateRequest(ctx context.Context, request cache.Request, timeout time.Duration) (cache.Decision, error) {
+	if ctx == nil {
+		return cache.Decision{}, ErrNilContext
+	}
+	if timeout <= 0 {
+		return cache.Decision{}, ErrInvalidTimeout
+	}
+	ctxTimeout, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	if err := ctxTimeout.Err(); err != nil {
+		return cache.Decision{}, err
+	}
+	type result struct {
+		decision cache.Decision
+		err      error
+	}
+	resultChan := make(chan result, 1)
+	err := h.pool.Submit(func() {
+		if err := ctxTimeout.Err(); err != nil {
+			resultChan <- result{err: err}
+			return
+		}
+		decision := h.cache.Evaluate(request, time.Now().UTC())
+		if err := ctxTimeout.Err(); err != nil {
+			resultChan <- result{err: err}
+			return
+		}
+		resultChan <- result{decision: decision}
+	})
+	if err != nil {
+		if timeoutErr := ctxTimeout.Err(); timeoutErr != nil {
+			return cache.Decision{}, timeoutErr
+		}
+		return cache.Decision{}, err
+	}
+	select {
+	case <-ctxTimeout.Done():
+		return cache.Decision{}, ctxTimeout.Err()
+	case result := <-resultChan:
+		if err := ctxTimeout.Err(); err != nil {
+			return cache.Decision{}, err
+		}
+		return result.decision, result.err
 	}
 }
 
