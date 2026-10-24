@@ -31,14 +31,20 @@ export default function AgentsPage() {
   const [msg, setMsg] = useState<string | null>(null);
 
   const load = useCallback(async () => {
-    const res = await fetch('/api/agents');
-    const data = await res.json();
-    const list: Agent[] = data.agents || [];
-    setAgents(list);
+    try {
+      const res = await fetch('/api/agents');
+      const data = await res.json();
+      const list: Agent[] = data.agents || [];
+      setAgents(list);
+    } catch (error) {
+      console.error('Failed to load agents:', error);
+    }
   }, []);
 
   useEffect(() => {
     load();
+    const interval = setInterval(load, 10000);
+    return () => clearInterval(interval);
   }, [load]);
 
   const filtered = useMemo(() => {
@@ -111,7 +117,7 @@ export default function AgentsPage() {
         </div>
         <button
           onClick={load}
-          className="self-start px-3 py-2 border border-[#1E293B] text-xs uppercase tracking-widest rounded"
+          className="self-start px-3 py-2 border border-[#1E293B] text-xs uppercase tracking-widest rounded hover:bg-[#121A2E] transition-colors"
         >
           <RefreshCw className="h-3.5 w-3.5 inline mr-2" /> Refresh
         </button>

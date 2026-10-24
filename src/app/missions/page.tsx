@@ -52,18 +52,24 @@ export default function MissionsPage() {
 
   const loadMissions = useCallback(async () => {
     try {
+      setLoading(true);
       const res = await fetch('/api/tasks');
       const data = await res.json();
       const tasks = data.tasks || [];
       
       const missionsWithSteps: MissionWithSteps[] = await Promise.all(
         tasks.map(async (task: Mission) => {
-          const stepsRes = await fetch(`/api/tasks/${task.id}/steps`);
-          const stepsData = await stepsRes.json();
-          return {
-            ...task,
-            steps: stepsData.steps || [],
-          };
+          try {
+            const stepsRes = await fetch(`/api/tasks/${task.id}/steps`);
+            const stepsData = await stepsRes.json();
+            return {
+              ...task,
+              steps: stepsData.steps || [],
+            };
+          } catch (error) {
+            console.error(`Failed to load steps for task ${task.id}:`, error);
+            return { ...task, steps: [] };
+          }
         })
       );
       
@@ -221,7 +227,7 @@ export default function MissionsPage() {
           <p className="text-xs text-slate-500 uppercase tracking-widest mt-1">Acompanhamento de execução  Neon  Polling 10s</p>
         </div>
         <div className="flex items-center gap-2">
-          <button onClick={loadMissions} className="px-3 py-2 border border-[#1E293B] text-xs uppercase tracking-widest rounded hover:bg-[#121A2E]">
+          <button onClick={loadMissions} className="px-3 py-2 border border-[#1E293B] text-xs uppercase tracking-widest rounded hover:bg-[#121A2E] transition-colors">
             <RefreshCw className="h-3.5 w-3.5 inline mr-2" /> Refresh
           </button>
         </div>

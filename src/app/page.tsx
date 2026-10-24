@@ -37,6 +37,7 @@ export default function OverviewPage() {
 
   const fetchData = useCallback(async () => {
     try {
+      setRefreshing(true);
       const [agentsRes, tasksRes, incidentsRes] = await Promise.all([
         fetch('/api/agents').then((r) => r.json()),
         fetch('/api/tasks').then((r) => r.json()),

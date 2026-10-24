@@ -12,13 +12,17 @@ export default function CommandsPage() {
   const [sending, setSending] = useState(false);
 
   const load = useCallback(async () => {
-    const [a, c] = await Promise.all([
-      fetch('/api/agents').then((r) => r.json()),
-      fetch('/api/commands').then((r) => r.json()),
-    ]);
-    setAgents(a.agents || []);
-    setCommands(c.commands || []);
-    if (!agentId && a.agents?.[0]) setAgentId(a.agents[0].id);
+    try {
+      const [a, c] = await Promise.all([
+        fetch('/api/agents').then((r) => r.json()),
+        fetch('/api/commands').then((r) => r.json()),
+      ]);
+      setAgents(a.agents || []);
+      setCommands(c.commands || []);
+      if (!agentId && a.agents?.[0]) setAgentId(a.agents[0].id);
+    } catch (error) {
+      console.error('Failed to load commands:', error);
+    }
   }, [agentId]);
 
   useEffect(() => {
@@ -52,7 +56,7 @@ export default function CommandsPage() {
           </h1>
           <p className="text-xs text-slate-500 uppercase tracking-widest mt-1">Dispatch remoto via webhook</p>
         </div>
-        <button onClick={load} className="px-3 py-2 border border-[#1E293B] text-xs uppercase tracking-widest rounded">
+        <button onClick={load} className="px-3 py-2 border border-[#1E293B] text-xs uppercase tracking-widest rounded hover:bg-[#121A2E] transition-colors">
           <RefreshCw className="h-3.5 w-3.5 inline mr-2" /> Refresh
         </button>
       </div>

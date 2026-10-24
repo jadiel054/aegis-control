@@ -15,6 +15,8 @@ export default function SecurityPage() {
       const res = await fetch('/api/incidents');
       const data = await res.json();
       setIncidents(data.incidents || []);
+    } catch (error) {
+      console.error('Failed to load incidents:', error);
     } finally {
       setLoading(false);
     }
@@ -47,7 +49,7 @@ export default function SecurityPage() {
           </h1>
           <p className="text-xs text-slate-500 uppercase tracking-widest mt-1">Incidentes · Neon</p>
         </div>
-        <button onClick={load} className="px-3 py-2 border border-[#1E293B] text-xs uppercase tracking-widest rounded">
+        <button onClick={load} className="px-3 py-2 border border-[#1E293B] text-xs uppercase tracking-widest rounded hover:bg-[#121A2E] transition-colors">
           <RefreshCw className="h-3.5 w-3.5 inline mr-2" /> Refresh
         </button>
       </div>
