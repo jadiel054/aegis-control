@@ -95,7 +95,7 @@ export async function executeReadyStep(taskId: string, stepIndex?: number) {
           brain?.text ||
           `Plano bootstrap (${agentLabel}): analisar "${mission.task.title}" e preparar execução para o worker.`;
       } else if (step.role === 'worker' || /plutao|plutão/i.test(agentLabel)) {
-      if (execMode === 'real') {
+        if (execMode === 'real') {
         // Call Plutao API for real execution
         const plutaoUrl = process.env.PLUTAO_API_URL || 'https://plutao-os.vercel.app';
         const response = await fetch(`${plutaoUrl}/api/agent/execute`, {
