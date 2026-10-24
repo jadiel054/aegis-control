@@ -218,6 +218,18 @@ export async function POST(request: Request) {
     if (text.startsWith('/approve ')) {
       const id = text.replace('/approve ', '').trim();
       try {
+        // Validate task exists and is in awaiting_approval state
+        const mission = await getMission(id);
+        if (!mission) {
+          await sendTelegramMessage(token, chatId, `\u274c Task n\u00e3o encontrada: <code>${id}</code>`, withKeyboard);
+          return NextResponse.json({ ok: true });
+        }
+        const idx = mission.task.current_step ?? 0;
+        const step = mission.steps.find((s: any) => s.step_index === idx);
+        if (!step || step.status !== 'awaiting_approval') {
+          await sendTelegramMessage(token, chatId, `\u274c Task n\u00e3o est\u00e1 aguardando aprova\u00e7\u00e3o: <code>${id}</code>`, withKeyboard);
+          return NextResponse.json({ ok: true });
+        }
         const result = await approveStep(id, `telegram:${chatId}`);
         // Continue pipeline after approval
         const advanced = await advanceMission(id);
@@ -236,6 +248,12 @@ export async function POST(request: Request) {
     if (text.startsWith('/reject ')) {
       const id = text.replace('/reject ', '').trim().split(/\s+/)[0];
       try {
+        // Validate task exists
+        const mission = await getMission(id);
+        if (!mission) {
+          await sendTelegramMessage(token, chatId, `\u274c Task n\u00e3o encontrada: <code>${id}</code>`, withKeyboard);
+          return NextResponse.json({ ok: true });
+        }
         await rejectStep(id, 'Rejeitado via Telegram', `telegram:${chatId}`);
         await sendTelegramMessage(token, chatId, `❌ Rejeitada\n<code>${id}</code>`, withKeyboard);
       } catch (e: any) {

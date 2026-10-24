@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server';
 import { getSql } from '@/lib/db';
+import { checkApiKey } from '@/lib/api-auth';
 
 export async function GET(
   _request: Request,
@@ -26,6 +27,9 @@ export async function PATCH(
   { params }: { params: { id: string } }
 ) {
   try {
+    if (!checkApiKey(request)) {
+      return NextResponse.json({ error: 'Unauthorized: AEGIS_API_KEY mismatch' }, { status: 401 });
+    }
     const body = await request.json();
     const sql = getSql();
 

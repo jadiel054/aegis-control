@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { getSql } from '@/lib/db';
 import { notifyOperatorTelegram } from '@/lib/fleet-notify';
+import { checkApiKey } from '@/lib/api-auth';
 
 export async function GET(request: Request) {
   try {
@@ -27,6 +28,9 @@ export async function GET(request: Request) {
 
 export async function POST(request: Request) {
   try {
+    if (!checkApiKey(request)) {
+      return NextResponse.json({ error: 'Unauthorized: AEGIS_API_KEY mismatch' }, { status: 401 });
+    }
     const body = await request.json();
     let {
       from_agent_id,

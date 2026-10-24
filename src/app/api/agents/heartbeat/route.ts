@@ -1,8 +1,12 @@
 import { NextResponse } from 'next/server';
 import { getSql } from '@/lib/db';
+import { checkApiKey } from '@/lib/api-auth';
 
 export async function POST(request: Request) {
   try {
+    if (!checkApiKey(request)) {
+      return NextResponse.json({ error: 'Unauthorized: AEGIS_API_KEY mismatch' }, { status: 401 });
+    }
     const body = await request.json();
     const { agent_id, name, status = 'online', metadata } = body;
 
