@@ -6,11 +6,18 @@ import { getMission } from '@/lib/dispatcher';
 export const runtime = 'nodejs';
 
 /** GET: download markdown body. POST: send audit doc to Telegram. */
+import { checkApiKey } from '@/lib/api-auth';
+
+/** GET: download markdown body. POST: send audit doc to Telegram. */
 export async function GET(
-  _req: Request,
+  req: Request,
   { params }: { params: { id: string } }
 ) {
   try {
+    if (!checkApiKey(req)) {
+      return NextResponse.json({ error: 'Unauthorized: AEGIS_API_KEY mismatch' }, { status: 401 });
+    }
+
     const mission = await getMission(params.id);
     if (!mission) return NextResponse.json({ error: 'Not found' }, { status: 404 });
     const md = buildAuditMarkdown(mission);
@@ -26,10 +33,14 @@ export async function GET(
 }
 
 export async function POST(
-  _req: Request,
+  req: Request,
   { params }: { params: { id: string } }
 ) {
   try {
+    if (!checkApiKey(req)) {
+      return NextResponse.json({ error: 'Unauthorized: AEGIS_API_KEY mismatch' }, { status: 401 });
+    }
+
     const result = await deliverMissionAudit(params.id);
     return NextResponse.json({ success: true, ...result });
   } catch (error: any) {

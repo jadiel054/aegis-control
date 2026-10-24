@@ -32,11 +32,32 @@ export type Task = {
   title: string;
   description: string | null;
   assigned_agent_id: string | null;
-  status: 'pending' | 'in_progress' | 'done' | 'failed';
+  status: 'pending' | 'in_progress' | 'done' | 'rejected' | 'failed';
   priority: 'low' | 'medium' | 'high';
   created_by: string;
+  result_summary?: string | null;
+  audit_markdown?: string | null;
   created_at: string;
   updated_at: string;
+};
+
+export type TaskStep = {
+  id: string;
+  task_id: string;
+  step_index: number;
+  role: string;
+  agent_name: string | null;
+  agent_id: string | null;
+  status: 'pending' | 'ready' | 'running' | 'awaiting_approval' | 'approved' | 'done' | 'rejected' | 'failed';
+  requires_approval: boolean;
+  execution_mode: 'real' | 'simulated';
+  approved_by: string | null;
+  approved_at: string | null;
+  input: string | null;
+  output: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  created_at: string;
 };
 
 export type Command = {

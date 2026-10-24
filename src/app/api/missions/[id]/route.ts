@@ -8,11 +8,17 @@ import {
 
 export const runtime = 'nodejs';
 
+import { checkApiKey } from '@/lib/api-auth';
+
 export async function GET(
-  _req: Request,
+  req: Request,
   { params }: { params: { id: string } }
 ) {
   try {
+    if (!checkApiKey(req)) {
+      return NextResponse.json({ error: 'Unauthorized: AEGIS_API_KEY mismatch' }, { status: 401 });
+    }
+
     const mission = await getMission(params.id);
     if (!mission) return NextResponse.json({ error: 'Not found' }, { status: 404 });
     return NextResponse.json(mission);
@@ -27,6 +33,10 @@ export async function POST(
   { params }: { params: { id: string } }
 ) {
   try {
+    if (!checkApiKey(request)) {
+      return NextResponse.json({ error: 'Unauthorized: AEGIS_API_KEY mismatch' }, { status: 401 });
+    }
+
     const body = await request.json();
     const action = body.action || 'complete';
 
@@ -41,15 +51,17 @@ export async function POST(
     }
 
     if (action === 'approve') {
-      const result = await approveStep(params.id, body.by || 'operator');
+      // API invocation uses fixed identity "api" and is authenticated via AEGIS_API_KEY check above
+      const result = await approveStep(params.id, 'api');
       return NextResponse.json({ success: true, ...result });
     }
 
     if (action === 'reject') {
+      // API invocation uses fixed identity "api" and is authenticated via AEGIS_API_KEY check above
       const result = await rejectStep(
         params.id,
-        body.reason || 'Rejeitado',
-        body.by || 'operator'
+        body.reason || 'Rejeitado via API',
+        'api'
       );
       return NextResponse.json({ success: true, mission: result });
     }

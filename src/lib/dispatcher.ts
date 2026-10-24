@@ -3,9 +3,9 @@ import { deliverMissionAudit } from '@/lib/audit-report';
 import { notifyOperatorTelegram } from '@/lib/fleet-notify';
 
 export const DEFAULT_PIPELINE = [
-  { role: 'orchestrator', agentHint: 'Morpheus', requires_approval: false },
-  { role: 'worker', agentHint: 'Plutao', requires_approval: true },
-  { role: 'llm_agent', agentHint: 'Zarith', requires_approval: false },
+  { role: 'orchestrator', agentHint: 'Morpheus', requires_approval: false, execution_mode: 'simulated' },
+  { role: 'worker', agentHint: 'Plutao', requires_approval: true, execution_mode: 'simulated' },
+  { role: 'llm_agent', agentHint: 'Zarith', requires_approval: false, execution_mode: 'simulated' },
 ] as const;
 
 export type CreateMissionInput = {
@@ -14,9 +14,28 @@ export type CreateMissionInput = {
   source?: string;
   created_by?: string;
   priority?: string;
-  pipeline?: Array<{ role: string; agentHint?: string; requires_approval?: boolean }>;
+  pipeline?: Array<{ role: string; agentHint?: string; requires_approval?: boolean; execution_mode?: 'real' | 'simulated' }>;
   autoRun?: boolean;
 };
+
+export function isChatAllowed(chatId: string | number): boolean {
+  const cleanId = String(chatId).trim().replace(/^telegram:/i, '');
+  if (cleanId === 'api') return true;
+
+  const allowedStr = process.env.TELEGRAM_ALLOWED_CHAT_IDS;
+  if (!allowedStr || !allowedStr.trim()) {
+    if (process.env.NODE_ENV === 'production') {
+      console.warn('[auth] Fail closed: TELEGRAM_ALLOWED_CHAT_IDS is not set in production');
+      return false;
+    }
+    return true;
+  }
+  const allowed = allowedStr
+    .split(',')
+    .map((s) => s.trim().replace(/^telegram:/i, ''))
+    .filter(Boolean);
+  return allowed.includes(cleanId);
+}
 
 async function resolveAgent(hint: string | undefined, role: string) {
   const sql = getSql();
@@ -77,9 +96,10 @@ export async function createMission(input: CreateMissionInput) {
   for (let i = 0; i < pipeline.length; i++) {
     const step = pipeline[i];
     const agent = await resolveAgent(step.agentHint, step.role);
+    const execMode = step.execution_mode || 'simulated';
     await sql`
       INSERT INTO task_steps (
-        task_id, step_index, role, agent_name, agent_id, status, requires_approval, input
+        task_id, step_index, role, agent_name, agent_id, status, requires_approval, execution_mode, input
       ) VALUES (
         ${task.id},
         ${i},
@@ -88,6 +108,7 @@ export async function createMission(input: CreateMissionInput) {
         ${agent?.id || null},
         ${i === 0 ? 'ready' : 'pending'},
         ${Boolean(step.requires_approval)},
+        ${execMode},
         ${i === 0 ? input.description || input.title : null}
       )
     `;
@@ -128,7 +149,7 @@ export async function completeStep(opts: {
   const step = mission.steps.find((s: any) => s.step_index === idx);
   if (!step) throw new Error('Step not found');
 
-  if (step.requires_approval && step.status !== 'approved' && step.status !== 'running') {
+  if (step.requires_approval && step.status !== 'approved') {
     if (step.status !== 'awaiting_approval') {
       await sql`
         UPDATE task_steps SET status = 'awaiting_approval', output = ${opts.output}, started_at = COALESCE(started_at, NOW())
@@ -195,6 +216,10 @@ export async function completeStep(opts: {
 }
 
 export async function approveStep(taskId: string, approvedBy: string) {
+  if (!isChatAllowed(approvedBy)) {
+    throw new Error('Chat/usuário não autorizado para aprovar missões.');
+  }
+
   const sql = getSql();
   const mission = await getMission(taskId);
   if (!mission) throw new Error('Task not found');
@@ -216,6 +241,10 @@ export async function approveStep(taskId: string, approvedBy: string) {
 }
 
 export async function rejectStep(taskId: string, reason: string, by: string) {
+  if (!isChatAllowed(by)) {
+    throw new Error('Chat/usuário não autorizado para rejeitar missões.');
+  }
+
   const sql = getSql();
   const mission = await getMission(taskId);
   if (!mission) throw new Error('Task not found');
@@ -228,7 +257,7 @@ export async function rejectStep(taskId: string, reason: string, by: string) {
     `;
   }
   await sql`
-    UPDATE tasks SET status = 'failed', result_summary = ${reason}, updated_at = NOW()
+    UPDATE tasks SET status = 'rejected', result_summary = ${reason}, updated_at = NOW()
     WHERE id = ${taskId}
   `;
   await notifyOperatorTelegram({
@@ -237,5 +266,11 @@ export async function rejectStep(taskId: string, reason: string, by: string) {
     detail: reason,
     taskId,
   }).catch(() => {});
+
+  // Deliver terminal audit report on rejection
+  await deliverMissionAudit(taskId).catch((e) =>
+    console.error('[audit-reject]', e)
+  );
+
   return getMission(taskId);
 }
