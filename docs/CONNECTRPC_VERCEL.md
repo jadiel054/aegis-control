@@ -57,3 +57,16 @@ A chave deve ter pelo menos 32 caracteres. A tabela precisa existir por meio da 
 ## Compatibilidade futura
 
 O servidor Go, o código gRPC e o `.proto` permanecem no repositório. Quando houver uma infraestrutura persistente, o mesmo contrato poderá ser servido por ConnectRPC/Go ou gRPC nativo sem alterar a semântica da decisão.
+
+
+## Testes
+
+Os casos de decisão ficam em `tests/fixtures/authorization-policy-cases.json` e são consumidos pelos testes do cache Go e do evaluator TypeScript, para manter a semântica de `ALLOW`/`DENY` alinhada.
+
+```bash
+npm ci
+npm test
+go test ./...
+```
+
+`npm test` executa o contrato Protobuf e a suíte do evaluator TypeScript. `go test ./...` executa os testes Go, incluindo os mesmos fixtures compartilhados.

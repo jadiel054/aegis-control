@@ -1,6 +1,7 @@
-import { createHash, timingSafeEqual } from 'node:crypto';
+import { timingSafeEqual } from 'node:crypto';
 import { Code, ConnectError } from '@connectrpc/connect';
 import { getSql } from '@/lib/db';
+import { createPolicyRevision, evaluatePolicy, type AuthorizationPolicy } from './policy-evaluator';
 import {
   Decision,
   EvaluateAccessRequest,
@@ -18,16 +19,7 @@ type PolicyRow = {
   valid_until: string | Date | null;
 };
 
-type Policy = {
-  policyId: string;
-  tenantId: string;
-  principalId: string;
-  action: string;
-  resource: string;
-  effect: 'ALLOW' | 'DENY';
-  validFrom: Date;
-  validUntil: Date | null;
-};
+type Policy = AuthorizationPolicy;
 
 type PolicySnapshot = {
   policies: Policy[];
@@ -77,19 +69,6 @@ interface RequestLike {
   requestHeader: Headers;
 }
 
-function canonicalPolicy(policy: Policy) {
-  return {
-    policy_id: policy.policyId,
-    tenant_id: policy.tenantId,
-    principal_id: policy.principalId,
-    action: policy.action,
-    resource: policy.resource,
-    effect: policy.effect,
-    valid_from: policy.validFrom.toISOString(),
-    valid_until: policy.validUntil?.toISOString() ?? null,
-  };
-}
-
 async function loadSnapshot(): Promise<PolicySnapshot> {
   const now = Date.now();
   if (memorySnapshot && memorySnapshot.expiresAt > now) return memorySnapshot;
@@ -122,9 +101,7 @@ async function loadSnapshot(): Promise<PolicySnapshot> {
       } satisfies Policy;
     });
 
-    const revision = `sha256:${createHash('sha256')
-      .update(JSON.stringify(policies.map(canonicalPolicy)))
-      .digest('hex')}`;
+    const revision = createPolicyRevision(policies);
     memorySnapshot = { policies, revision, expiresAt: now + CACHE_TTL_MS };
     return memorySnapshot;
   } catch (error) {
@@ -151,54 +128,16 @@ export async function evaluateAccess(
   const resource = validateText(request.resource, 'resource', 512);
   const snapshot = await loadSnapshot();
   const now = new Date();
-  const policy = snapshot.policies.find((candidate) =>
-    candidate.tenantId === tenantId &&
-    candidate.principalId === principalId &&
-    candidate.action === action &&
-    candidate.resource === resource,
-  );
-
   const base = {
     requestId,
     policyRevision: snapshot.revision,
     evaluatedAt: now.toISOString(),
   };
-
-  if (!policy) {
-    return new EvaluateAccessResponse({
-      ...base,
-      decision: Decision.DENY,
-      reason: 'POLICY_NOT_FOUND',
-    });
-  }
-  if (now < policy.validFrom) {
-    return new EvaluateAccessResponse({
-      ...base,
-      decision: Decision.DENY,
-      reason: 'POLICY_NOT_ACTIVE',
-      policyId: policy.policyId,
-    });
-  }
-  if (policy.validUntil && now >= policy.validUntil) {
-    return new EvaluateAccessResponse({
-      ...base,
-      decision: Decision.DENY,
-      reason: 'POLICY_EXPIRED',
-      policyId: policy.policyId,
-    });
-  }
-  if (policy.effect !== 'ALLOW') {
-    return new EvaluateAccessResponse({
-      ...base,
-      decision: Decision.DENY,
-      reason: 'POLICY_DENIED',
-      policyId: policy.policyId,
-    });
-  }
+  const outcome = evaluatePolicy(snapshot.policies, { tenantId, principalId, action, resource }, now);
   return new EvaluateAccessResponse({
     ...base,
-    decision: Decision.ALLOW,
-    reason: 'ALLOW',
-    policyId: policy.policyId,
+    decision: outcome.decision === 'ALLOW' ? Decision.ALLOW : Decision.DENY,
+    reason: outcome.reason,
+    ...(outcome.policyId ? { policyId: outcome.policyId } : {}),
   });
 }
