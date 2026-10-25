@@ -6,7 +6,10 @@ export const dynamic = 'force-dynamic';
 
 /**
  * POST: Change operator password
- * Note: In production, this should use bcrypt/argon2 for password hashing
+ *
+ * Status: SIMULATION ONLY.
+ * Does not persist a new password. Real implementation must hash with
+ * bcrypt/argon2 and store against the operator record.
  */
 export async function POST(request: Request) {
   try {
@@ -24,7 +27,7 @@ export async function POST(request: Request) {
       );
     }
 
-    if (newPassword.length < 8) {
+    if (typeof newPassword !== 'string' || newPassword.length < 8) {
       return NextResponse.json(
         { error: 'Password must be at least 8 characters' },
         { status: 400 }
@@ -32,18 +35,11 @@ export async function POST(request: Request) {
     }
 
     const sql = getSql();
-    const operatorId = 'default-operator'; // In production, get from session
+    const operatorId = 'default-operator'; // TODO: derive from signed session
 
-    // In production, you would:
-    // 1. Verify currentPassword against hashed password in database
-    // 2. Hash newPassword with bcrypt/argon2
-    // 3. Update the hashed password in database
-
-    // For now, we'll simulate the process
-    // Check if operator exists
     const existing = await sql`
-      SELECT id FROM operators 
-      WHERE id = ${operatorId} 
+      SELECT id FROM operators
+      WHERE id = ${operatorId}
       LIMIT 1
     `;
 
@@ -51,21 +47,14 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Operator not found' }, { status: 404 });
     }
 
-    // In a real implementation, you would:
-    // const isValid = await verifyPassword(currentPassword);
-    // if (!isValid) {
-    //   return NextResponse.json({ error: 'Current password is incorrect' }, { status: 401 });
-    // }
-    // const hashedPassword = await hashPassword(newPassword);
-    // await sql`UPDATE operators SET password_hash = ${hashedPassword} WHERE id = ${operatorId}`;
-
-    // For now, just return success (simulation)
+    // Simulation only — password is not actually changed.
     return NextResponse.json({
       success: true,
-      message: 'Password changed successfully (simulation - implement bcrypt/argon2 for production)',
+      message:
+        'Password change accepted (simulation). Implement bcrypt/argon2 + DB update before production use.',
     });
-  } catch (error: any) {
+  } catch (error) {
     console.error('Failed to change password:', error);
-    return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }
