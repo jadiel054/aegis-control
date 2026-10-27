@@ -76,7 +76,7 @@ function verifySessionToken(token: string, secret: string): boolean {
   }
 }
 
-export function isAuthorized(): boolean {
+export async function isAuthorized(): Promise<boolean> {
   const secret = getSessionSecret();
 
   // No secret configured → fail closed in production
@@ -86,21 +86,21 @@ export function isAuthorized(): boolean {
     return true;
   }
 
-  const jar = cookies();
+  const jar = await cookies();
   const token = jar.get(COOKIE_NAME)?.value;
   if (!token) return false;
 
   return verifySessionToken(token, secret);
 }
 
-export function setAuthCookie() {
+export async function setAuthCookie() {
   const secret = getSessionSecret();
   if (!secret) {
     throw new Error('Cannot set session: AEGIS_ADMIN_PASSWORD (or AEGIS_SESSION_SECRET) is not configured');
   }
 
   const token = createSessionToken(secret);
-  const jar = cookies();
+  const jar = await cookies();
 
   jar.set(COOKIE_NAME, token, {
     httpOnly: true,
@@ -111,7 +111,7 @@ export function setAuthCookie() {
   });
 }
 
-export function clearAuthCookie() {
-  const jar = cookies();
+export async function clearAuthCookie() {
+  const jar = await cookies();
   jar.delete(COOKIE_NAME);
 }

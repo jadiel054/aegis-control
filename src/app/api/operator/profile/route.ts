@@ -9,7 +9,7 @@ export const dynamic = 'force-dynamic';
  */
 export async function GET() {
   try {
-    if (!isAuthorized()) {
+    if (!await isAuthorized()) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 

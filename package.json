@@ -8,9 +8,11 @@
     "start": "next start",
     "lint": "next lint",
     "proto:generate": "buf generate",
+    "typecheck": "tsc --noEmit",
+    "test:contract": "tsx --test tests/contract/*.test.ts",
     "test:contracts": "node --test tests/contracts/*.test.mjs",
     "test:authorization": "tsx --test tests/authorization/*.test.ts",
-    "test": "npm run test:contracts && npm run test:authorization"
+    "test": "npm run test:contract && npm run test:contracts && npm run test:authorization"
   },
   "dependencies": {
     "@bufbuild/protobuf": "^1.10.1",

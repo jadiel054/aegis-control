@@ -8,6 +8,107 @@ import { notifyOperatorTelegram } from '@/lib/fleet-notify';
  * Executes a ready step on behalf of the assigned agent (bootstrap runner).
  * Real workers can replace this later by polling task_steps themselves.
  */
+const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function callAgentWithResilience(
+  baseUrl: string,
+  payload: Record<string, any>,
+  agentName: string
+): Promise<any> {
+  const apiKey = process.env.AEGIS_API_KEY;
+  if (!apiKey) {
+    throw new Error('AEGIS_API_KEY não está definida nas variáveis de ambiente.');
+  }
+
+  // 1. Best-effort GET /api/health with 10s timeout to wake free-tier services
+  try {
+    const healthController = new AbortController();
+    const healthTimeout = setTimeout(() => healthController.abort(), 10000);
+    await fetch(`${baseUrl}/api/health`, {
+      method: 'GET',
+      signal: healthController.signal,
+    }).catch(() => {});
+    clearTimeout(healthTimeout);
+  } catch {
+    // Ignore health check failures
+  }
+
+  // 2. Call /api/agent/execute with timeout and retries
+  const timeoutMs = Number(process.env.AGENT_TIMEOUT_MS) || 60000;
+  const maxAttempts = 3;
+  const backoffDelays = [2000, 5000];
+  const attemptLogs: string[] = [];
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+    try {
+      const response = await fetch(`${baseUrl}/api/agent/execute`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-api-key': apiKey,
+        },
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      });
+      clearTimeout(timer);
+
+      if (!response.ok) {
+        const is4xx = response.status >= 400 && response.status < 500;
+        const errDetail = `${agentName} API retornou HTTP ${response.status}`;
+        attemptLogs.push(`Tentativa ${attempt}/${maxAttempts}: ${errDetail}`);
+
+        if (is4xx) {
+          // Do not retry 4xx errors
+          throw new Error(
+            `Falha na chamada para ${agentName} (${errDetail}).\n` +
+              attemptLogs.join('\n')
+          );
+        }
+
+        // 5xx error: throw to trigger retry if attempts remain
+        throw new Error(errDetail);
+      }
+
+      const data = await response.json();
+      return data;
+    } catch (err: any) {
+      clearTimeout(timer);
+      const isAbort = err.name === 'AbortError';
+      const errMsg = isAbort
+        ? `Timeout de ${timeoutMs}ms excedido`
+        : err.message || String(err);
+
+      if (!attemptLogs.some((log) => log.includes(`Tentativa ${attempt}/`))) {
+        attemptLogs.push(`Tentativa ${attempt}/${maxAttempts}: ${errMsg}`);
+      }
+
+      // If error is 4xx (non-retryable error rethrown above), stop immediately
+      if (err.message && err.message.startsWith(`Falha na chamada para ${agentName}`)) {
+        throw err;
+      }
+
+      // If attempts exhausted, fail
+      if (attempt === maxAttempts) {
+        throw new Error(
+          `Falha na chamada para ${agentName} após ${maxAttempts} tentativas.\n` +
+            attemptLogs.join('\n')
+        );
+      }
+
+      // Wait backoff delay before retry
+      const backoff = backoffDelays[attempt - 1] || 5000;
+      await delay(backoff);
+    }
+  }
+}
+
+/**
+ * Executes a ready step on behalf of the assigned agent (bootstrap runner).
+ * Real workers can replace this later by polling task_steps themselves.
+ */
 export async function executeReadyStep(taskId: string, stepIndex?: number) {
   const mission = await getMission(taskId);
   if (!mission) throw new Error('Mission not found');
@@ -52,27 +153,18 @@ export async function executeReadyStep(taskId: string, stepIndex?: number) {
     if (step.role === 'orchestrator' || /morpheus/i.test(agentLabel)) {
       if (execMode === 'real') {
         const morpheusUrl = process.env.MORPHEUS_API_URL || 'https://morpheus-app-5bmx.onrender.com';
-        const response = await fetch(`${morpheusUrl}/api/agent/execute`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-api-key': process.env.AEGIS_API_KEY || '',
-          },
-          body: JSON.stringify({
+        const data = await callAgentWithResilience(
+          morpheusUrl,
+          {
             task_id: taskId,
             step_index: idx,
             input: input,
             command: 'plan_real_mission',
             mission_title: mission.task.title,
             mission_description: mission.task.description,
-          }),
-        });
-        
-        if (!response.ok) {
-          throw new Error(`Morpheus API retornou erro: ${response.status}`);
-        }
-        
-        const data = await response.json();
+          },
+          'Morpheus'
+        );
         output = data.output || data.plan || `Plano REAL gerado pelo Morpheus para: ${mission.task.title}`;
       } else {
         const brain = await jarvisReply({
@@ -96,30 +188,21 @@ export async function executeReadyStep(taskId: string, stepIndex?: number) {
           `Plano bootstrap (${agentLabel}): analisar "${mission.task.title}" e preparar execução para o worker.`;
       }
     } else if (step.role === 'worker' || /plutao|plutão/i.test(agentLabel)) {
-        if (execMode === 'real') {
+      if (execMode === 'real') {
         // Call Plutao API for real execution
         const plutaoUrl = process.env.PLUTAO_API_URL || 'https://plutao-os.vercel.app';
-        const response = await fetch(`${plutaoUrl}/api/agent/execute`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-api-key': process.env.AEGIS_API_KEY || '',
-          },
-          body: JSON.stringify({
+        const data = await callAgentWithResilience(
+          plutaoUrl,
+          {
             task_id: taskId,
             step_index: idx,
             input: input,
             command: 'execute_real',
             mission_title: mission.task.title,
             mission_context: mission.task.description,
-          }),
-        });
-        
-        if (!response.ok) {
-          throw new Error(`Plutão API retornou erro: ${response.status}`);
-        }
-        
-        const data = await response.json();
+          },
+          'Plutão'
+        );
         output = data.output || data.result || `Execução REAL concluída pelo Plutão para: ${mission.task.title}`;
       } else {
         output = [
@@ -147,28 +230,19 @@ export async function executeReadyStep(taskId: string, stepIndex?: number) {
               `Passo ${s.step_index} [${s.agent_name || s.role}] (${(s.execution_mode || 'simulated').toUpperCase()}): ${s.output || '(sem output)'}`
           )
           .join('\n---\n');
-        
-        const response = await fetch(`${zarithUrl}/api/agent/execute`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-api-key': process.env.AEGIS_API_KEY || '',
-          },
-          body: JSON.stringify({
+
+        const data = await callAgentWithResilience(
+          zarithUrl,
+          {
             task_id: taskId,
             step_index: idx,
             input: input,
             command: 'synthesize_real',
             mission_title: mission.task.title,
             previous_steps: previousStepsContext,
-          }),
-        });
-        
-        if (!response.ok) {
-          throw new Error(`Zarith API retornou erro: ${response.status}`);
-        }
-        
-        const data = await response.json();
+          },
+          'Zarith'
+        );
         output = data.output || data.synthesis || `Síntese REAL gerada pelo Zarith para: ${mission.task.title}`;
       } else {
         const previousStepsContext = mission.steps
