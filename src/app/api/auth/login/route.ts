@@ -14,7 +14,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Invalid credentials' }, { status: 401 });
     }
 
-    setAuthCookie();
+    await setAuthCookie();
     return NextResponse.json({ success: true });
   } catch (error) {
     console.error('Login error:', error);

@@ -53,15 +53,59 @@ AEGIS_API_KEY=your-agent-api-key   # Required for authenticated requests
 
 **Note:** All agents must send the `x-api-key` or `Authorization: Bearer` header in requests to write endpoints.
 
-## Registered agents (seed)
+## Ecossistema e Fluxo de Missões
 
-- Jarvis (orchestrator)
-- Morpheus (coordinator)
-- Zarith (engineer)
-- Plutao (worker)
-- VitaBot (telegram_bot)
-- SecretarIA (saas)
-- Afiliados (worker)
+O **Aegis Control** atua como hub central de missões, gerenciando gates de aprovação, auditorias e a coordenação entre agentes autônomos.
+
+### Tabela de Papéis
+
+| Componente / Agente | Papel | Responsabilidade Principal |
+|---------------------|-------|----------------------------|
+| **Aegis** | Hub Central | Orquestração do ciclo de vida das missões, gates de aprovação e auditoria. |
+| **Morpheus** | Planejador | Análise e criação do plano técnico inicial (`plan_real_mission`). |
+| **Plutão OS** | Executor | Execução com write-gate do operador para ações com efeito colateral (`execute_real`). |
+| **Zarith** | Engenheiro / Síntese | Consolidação de resultados, geração de relatórios e auditoria (`synthesize_real`). |
+| **Jarvis** | Orquestrador *(previsto)* | Orquestrador global e assistente previsto para integração em fases futuras (não integrado diretamente neste contrato). |
+
+### Fluxo Padrão de Execução
+
+```
+[Operador] ──> [Aegis (Hub)] ──> [Morpheus (Plano)] ──> [Plutão OS (Execução + Gate)] ──> [Zarith (Síntese)] ──> [Auditoria Aegis]
+```
+
+1. **Abertura da Missão:** O Operador envia a demanda para o Aegis.
+2. **Planejamento:** Aegis aciona o **Morpheus** (`plan_real_mission`).
+3. **Execução:** Aegis passa o plano para o **Plutão OS** (`execute_real`). Caso exija efeito colateral, aguarda o write-gate do operador.
+4. **Síntese:** Aegis chama o **Zarith** (`synthesize_real`) para gerar a síntese baseada estritamente no histórico.
+5. **Auditoria:** Aegis encerra a missão e entrega o relatório de auditoria final.
+
+### Contrato Único de Integração com Agentes
+
+No modo real (`execution_mode: "real"`), o Aegis se comunica com os serviços dos agentes através do endpoint padronizado:
+
+```
+POST {MORPHEUS_API_URL | PLUTAO_API_URL | ZARITH_API_URL}/api/agent/execute
+Header: x-api-key: <AEGIS_API_KEY>
+Content-Type: application/json
+
+Body JSON:
+{
+  "task_id": "string",
+  "step_index": number,
+  "input": "string",
+  "command": "plan_real_mission" | "execute_real" | "synthesize_real",
+  "mission_title": "string",
+  ...
+}
+```
+
+**Resposta Esperada:** HTTP 200 com JSON:
+```json
+{
+  "success": true,
+  "output": "Resultado da execução ou síntese"
+}
+```
 
 ## API
 
