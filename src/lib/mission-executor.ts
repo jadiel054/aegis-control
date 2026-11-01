@@ -8,9 +8,9 @@ const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
 async function callAgentWithResilience(
   baseUrl: string,
-  payload: Record<string, any>,
+  payload: Record<string, unknown>,
   agentName: string
-): Promise<any> {
+): Promise<Record<string, unknown>> {
   const apiKey = process.env.AEGIS_API_KEY;
   if (!apiKey) {
     throw new Error('AEGIS_API_KEY não está definida nas variáveis de ambiente.');
@@ -71,20 +71,21 @@ async function callAgentWithResilience(
         throw new Error(errDetail);
       }
 
-      const data = await response.json();
+      const data = (await response.json()) as Record<string, unknown>;
       return data;
-    } catch (err: any) {
+    } catch (err: unknown) {
       clearTimeout(timer);
-      const isAbort = err.name === 'AbortError';
+      const e = err as { name?: string; message?: string };
+      const isAbort = e.name === 'AbortError';
       const errMsg = isAbort
         ? `Timeout de ${timeoutMs}ms excedido`
-        : err.message || String(err);
+        : e.message || String(err);
 
       if (!attemptLogs.some((log) => log.includes(`Tentativa ${attempt}/`))) {
         attemptLogs.push(`Tentativa ${attempt}/${maxAttempts}: ${errMsg}`);
       }
 
-      if (err.message && err.message.startsWith(`Falha na chamada para ${agentName}`)) {
+      if (e.message && e.message.startsWith(`Falha na chamada para ${agentName}`)) {
         throw err;
       }
 
@@ -99,6 +100,13 @@ async function callAgentWithResilience(
       await delay(backoff);
     }
   }
+
+  throw new Error(`Falha na chamada para ${agentName}`);
+}
+
+async function llmFallback(prompt: string): Promise<string> {
+  const reply = await jarvisReply({ userText: prompt });
+  return reply?.text || prompt;
 }
 
 export async function executeReadyStep(taskId: string, stepIndex?: number) {
@@ -106,7 +114,7 @@ export async function executeReadyStep(taskId: string, stepIndex?: number) {
   if (!mission) throw new Error('Mission not found');
 
   const idx = stepIndex ?? Number(mission.task.current_step ?? 0);
-  const step = mission.steps.find((s: any) => s.step_index === idx);
+  const step = mission.steps.find((s: { step_index: number }) => s.step_index === idx);
   if (!step) throw new Error('Step not found');
 
   if (step.status === 'awaiting_approval') {
@@ -131,7 +139,7 @@ export async function executeReadyStep(taskId: string, stepIndex?: number) {
     mission.task.title ||
     '';
 
-  const agentLabel = step.agent_name || step.role;
+  const agentLabel = String(step.agent_name || step.role);
   const execMode = step.execution_mode || 'real';
   let output = '';
 
@@ -152,14 +160,10 @@ export async function executeReadyStep(taskId: string, stepIndex?: number) {
           },
           'Morpheus'
         );
-        output =
-          data.output ||
-          data.plan ||
-          JSON.stringify(data);
+        output = String(data.output || data.plan || JSON.stringify(data));
       } else {
-        output = await jarvisReply(
-          `Planeje a missão "${mission.task.title}": ${input}`,
-          { mode: 'plan' }
+        output = await llmFallback(
+          `Planeje a missão "${mission.task.title}": ${input}`
         );
       }
     } else if (step.role === 'worker' || /plut[aã]o/i.test(agentLabel)) {
@@ -177,16 +181,33 @@ export async function executeReadyStep(taskId: string, stepIndex?: number) {
           },
           'Plutao'
         );
-        output = data.output || JSON.stringify(data);
+        output = String(data.output || JSON.stringify(data));
+        if (data.gated || data.status === 'awaiting_approval') {
+          await sql`
+            UPDATE task_steps
+            SET status = 'awaiting_approval', output = ${output}, finished_at = NOW()
+            WHERE id = ${step.id}
+          `;
+          await notifyOperatorTelegram({
+            kind: 'need_confirm',
+            agentName: agentLabel,
+            title: mission.task.title,
+            detail: output.slice(0, 1500),
+            taskId,
+          }).catch(() => {});
+          return { status: 'awaiting_approval', output };
+        }
       } else {
-        output = await jarvisReply(`Execute o passo worker: ${input}`, { mode: 'execute' });
+        output = await llmFallback(`Execute o passo worker: ${input}`);
       }
     } else if (/zarith/i.test(agentLabel) || step.role === 'llm_agent' || step.role === 'synthesizer') {
       if (execMode === 'real') {
         const zarithUrl = process.env.ZARITH_API_URL || 'https://zarith-api.onrender.com';
         const prev = mission.steps
-          .filter((s: any) => s.step_index < idx && s.output)
-          .map((s: any) => `### ${s.agent_name || s.role}\n${s.output}`)
+          .filter((s: { step_index: number; output?: string }) => s.step_index < idx && s.output)
+          .map((s: { agent_name?: string; role?: string; output?: string }) =>
+            `### ${s.agent_name || s.role}\n${s.output}`
+          )
           .join('\n\n');
         const data = await callAgentWithResilience(
           zarithUrl,
@@ -201,24 +222,24 @@ export async function executeReadyStep(taskId: string, stepIndex?: number) {
           },
           'Zarith'
         );
-        output = data.output || data.synthesis || JSON.stringify(data);
+        output = String(data.output || data.synthesis || JSON.stringify(data));
       } else {
-        output = await jarvisReply(`Sintetize resultados: ${input}`, { mode: 'synthesize' });
+        output = await llmFallback(`Sintetize resultados: ${input}`);
       }
     } else {
-      output = await jarvisReply(`Execute passo ${agentLabel}: ${input}`, { mode: 'generic' });
+      output = await llmFallback(`Execute passo ${agentLabel}: ${input}`);
     }
 
     await completeStep({ taskId, stepIndex: idx, output, agentName: agentLabel });
     return { status: 'done', output };
-  } catch (err: any) {
-    const msg = err.message || String(err);
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
     await sql`
       UPDATE task_steps SET status = 'failed', output = ${msg}, finished_at = NOW()
       WHERE id = ${step.id}
     `;
     await notifyOperatorTelegram({
-      kind: 'failure',
+      kind: 'failed',
       agentName: agentLabel,
       title: mission.task.title,
       detail: msg,
@@ -234,7 +255,7 @@ export async function advanceMission(taskId: string) {
     const mission = await getMission(taskId);
     if (!mission) throw new Error('Mission not found');
     const idx = Number(mission.task.current_step ?? 0);
-    const step = mission.steps.find((s: any) => s.step_index === idx);
+    const step = mission.steps.find((s: { step_index: number }) => s.step_index === idx);
     if (!step) break;
     if (step.status === 'awaiting_approval') {
       logs.push(`step ${idx}: awaiting_approval`);
@@ -251,12 +272,13 @@ export async function advanceMission(taskId: string) {
     logs.push(`step ${idx}: executing ${step.agent_name || step.role}`);
     const r = await executeReadyStep(taskId, idx);
     logs.push(`step ${idx}: ${r.status}`);
-    if (r.status === 'awaiting_approval' || r.status === 'done') {
-      const after = await getMission(taskId);
-      const next = after?.steps?.find((s: any) => s.step_index === idx + 1);
-      if (!next || after?.task?.status === 'done' || after?.task?.status === 'completed') break;
-      if (r.status === 'awaiting_approval') break;
-    }
+    if (r.status === 'awaiting_approval') break;
+
+    const after = await getMission(taskId);
+    if (!after) break;
+    if (after.task?.status === 'done' || after.task?.status === 'completed') break;
+    const next = after.steps?.find((s: { step_index: number }) => s.step_index === idx + 1);
+    if (!next) break;
   }
   try {
     await deliverMissionAudit(taskId);
