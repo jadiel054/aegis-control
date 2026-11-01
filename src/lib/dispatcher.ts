@@ -3,9 +3,9 @@ import { deliverMissionAudit } from '@/lib/audit-report';
 import { notifyOperatorTelegram } from '@/lib/fleet-notify';
 
 export const DEFAULT_PIPELINE = [
-  { role: 'orchestrator', agentHint: 'Morpheus', requires_approval: false, execution_mode: 'simulated' },
-  { role: 'worker', agentHint: 'Plutao', requires_approval: true, execution_mode: 'simulated' },
-  { role: 'llm_agent', agentHint: 'Zarith', requires_approval: false, execution_mode: 'simulated' },
+  { role: 'orchestrator', agentHint: 'Morpheus', requires_approval: false, execution_mode: 'real' },
+  { role: 'worker', agentHint: 'Plutao', requires_approval: true, execution_mode: 'real' },
+  { role: 'llm_agent', agentHint: 'Zarith', requires_approval: false, execution_mode: 'real' },
 ] as const;
 
 export type CreateMissionInput = {
@@ -96,7 +96,7 @@ export async function createMission(input: CreateMissionInput) {
   for (let i = 0; i < pipeline.length; i++) {
     const step = pipeline[i];
     const agent = await resolveAgent(step.agentHint, step.role);
-    const execMode = step.execution_mode || 'simulated';
+    const execMode = step.execution_mode || 'real';
     await sql`
       INSERT INTO task_steps (
         task_id, step_index, role, agent_name, agent_id, status, requires_approval, execution_mode, input
@@ -187,7 +187,6 @@ export async function completeStep(opts: {
       taskId: opts.taskId,
     }).catch(() => {});
 
-    // Audit pack → Telegram .md
     await deliverMissionAudit(opts.taskId).catch((e) =>
       console.error('[audit]', e)
     );
@@ -223,17 +222,15 @@ export async function approveStep(taskId: string, approvedBy: string) {
   const sql = getSql();
   const mission = await getMission(taskId);
   if (!mission) throw new Error('Task not found');
-  
-  // Only reject if task is in rejectable state (pending or in_progress)
+
   if (!['pending', 'in_progress'].includes(mission.task.status)) {
-    throw new Error(`Não é possível rejeitar: task está em estado '${mission.task.status}' (permitido: pending, in_progress)`);
+    throw new Error(`Não é possível aprovar: task está em estado '${mission.task.status}'`);
   }
-  
+
   const idx = mission.task.current_step ?? 0;
   const step = mission.steps.find((s: any) => s.step_index === idx);
   if (!step) throw new Error('Step not found');
 
-  // Only approve if current step is awaiting_approval
   if (step.status !== 'awaiting_approval') {
     throw new Error(`Não é possível aprovar: passo atual está em estado '${step.status}' (esperado: 'awaiting_approval')`);
   }
@@ -258,12 +255,11 @@ export async function rejectStep(taskId: string, reason: string, by: string) {
   const sql = getSql();
   const mission = await getMission(taskId);
   if (!mission) throw new Error('Task not found');
-  
-  // Only reject if task is in rejectable state (pending or in_progress)
+
   if (!['pending', 'in_progress'].includes(mission.task.status)) {
-    throw new Error(`Não é possível rejeitar: task está em estado '${mission.task.status}' (permitido: pending, in_progress)`);
+    throw new Error(`Não é possível rejeitar: task está em estado '${mission.task.status}'`);
   }
-  
+
   const idx = mission.task.current_step ?? 0;
   const step = mission.steps.find((s: any) => s.step_index === idx);
   if (step) {
@@ -283,7 +279,6 @@ export async function rejectStep(taskId: string, reason: string, by: string) {
     taskId,
   }).catch(() => {});
 
-  // Deliver terminal audit report on rejection
   await deliverMissionAudit(taskId).catch((e) =>
     console.error('[audit-reject]', e)
   );
