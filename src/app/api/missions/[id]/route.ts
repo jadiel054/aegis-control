@@ -5,22 +5,22 @@ import {
   getMission,
   rejectStep,
 } from '@/lib/dispatcher';
+import { checkApiKey } from '@/lib/api-auth';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-import { checkApiKey } from '@/lib/api-auth';
-
 export async function GET(
   req: Request,
-  { params }: { params: { id: string } }
+  context: { params: Promise<{ id: string }> }
 ) {
   try {
     if (!checkApiKey(req)) {
       return NextResponse.json({ error: 'Unauthorized: AEGIS_API_KEY mismatch' }, { status: 401 });
     }
 
-    const mission = await getMission(params.id);
+    const { id } = await context.params;
+    const mission = await getMission(id);
     if (!mission) return NextResponse.json({ error: 'Not found' }, { status: 404 });
     return NextResponse.json(mission);
   } catch (error: any) {
@@ -31,19 +31,20 @@ export async function GET(
 /** Agent completes current step / handoff */
 export async function POST(
   request: Request,
-  { params }: { params: { id: string } }
+  context: { params: Promise<{ id: string }> }
 ) {
   try {
     if (!checkApiKey(request)) {
       return NextResponse.json({ error: 'Unauthorized: AEGIS_API_KEY mismatch' }, { status: 401 });
     }
 
+    const { id } = await context.params;
     const body = await request.json();
     const action = body.action || 'complete';
 
     if (action === 'complete') {
       const result = await completeStep({
-        taskId: params.id,
+        taskId: id,
         stepIndex: body.step_index,
         output: body.output || '',
         agentName: body.agent_name,
@@ -52,15 +53,13 @@ export async function POST(
     }
 
     if (action === 'approve') {
-      // API invocation uses fixed identity "api" and is authenticated via AEGIS_API_KEY check above
-      const result = await approveStep(params.id, 'api');
+      const result = await approveStep(id, 'api');
       return NextResponse.json({ success: true, ...result });
     }
 
     if (action === 'reject') {
-      // API invocation uses fixed identity "api" and is authenticated via AEGIS_API_KEY check above
       const result = await rejectStep(
-        params.id,
+        id,
         body.reason || 'Rejeitado via API',
         'api'
       );

@@ -88,6 +88,19 @@ export async function sendChatAction(
   return telegramApi(token, 'sendChatAction', { chat_id: chatId, action });
 }
 
+export async function answerCallbackQuery(
+  token: string,
+  callbackQueryId: string,
+  text?: string,
+  showAlert = false
+) {
+  return telegramApi(token, 'answerCallbackQuery', {
+    callback_query_id: callbackQueryId,
+    text: text?.slice(0, 200),
+    show_alert: showAlert,
+  });
+}
+
 export async function getTelegramFile(token: string, fileId: string) {
   const file = await telegramApi(token, 'getFile', { file_id: fileId });
   const path = file.file_path as string;
@@ -123,7 +136,7 @@ export async function getTelegramWebhookInfo(token: string) {
 export const AEGIS_BOT_COMMANDS = [
   { command: 'start', description: 'Início' },
   { command: 'mission', description: 'Criar missão compartilhada' },
-  { command: 'approve', description: 'Aprovar passo (task_id)' },
+  { command: 'approve', description: 'Aprovar passo (task_id ou último pendente)' },
   { command: 'reject', description: 'Rejeitar missão' },
   { command: 'status', description: 'Fleet' },
   { command: 'resumo', description: 'Resumo' },
@@ -143,5 +156,18 @@ export function quickReplyKeyboard() {
     ],
     resize_keyboard: true,
     is_persistent: true,
+  };
+}
+
+/** Inline buttons for write-gate approval */
+export function approvalInlineKeyboard(taskId: string) {
+  return {
+    inline_keyboard: [
+      [
+        { text: '✅ Aprovar', callback_data: `approve:${taskId}` },
+        { text: '❌ Rejeitar', callback_data: `reject:${taskId}` },
+      ],
+      [{ text: '📋 Ver passos', callback_data: `task:${taskId}` }],
+    ],
   };
 }

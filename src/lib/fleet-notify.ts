@@ -1,5 +1,5 @@
 import { getSql } from '@/lib/db';
-import { sendTelegramMessage } from '@/lib/telegram';
+import { approvalInlineKeyboard, sendTelegramMessage } from '@/lib/telegram';
 
 export type FleetEvent = {
   kind:
@@ -34,6 +34,13 @@ function formatEvent(ev: FleetEvent) {
     ev.detail || '',
     ev.taskId ? `task: <code>${ev.taskId}</code>` : '',
   ].filter(Boolean);
+
+  if (ev.kind === 'need_confirm' && ev.taskId) {
+    lines.push('', 'Toque nos botões abaixo ou use:');
+    lines.push(`<code>/approve ${ev.taskId}</code>`);
+    lines.push(`<code>/reject ${ev.taskId}</code>`);
+  }
+
   return lines.join('\n');
 }
 
@@ -56,10 +63,15 @@ export async function notifyOperatorTelegram(ev: FleetEvent) {
   if (chats.length === 0) return { sent: 0, reason: 'no_chat_ids' };
 
   const text = formatEvent(ev);
+  const extra =
+    ev.kind === 'need_confirm' && ev.taskId
+      ? { reply_markup: approvalInlineKeyboard(ev.taskId) }
+      : undefined;
+
   let sent = 0;
   for (const chatId of chats) {
     try {
-      await sendTelegramMessage(bot.telegram_bot_token, chatId, text);
+      await sendTelegramMessage(bot.telegram_bot_token, chatId, text, extra);
       sent++;
     } catch (e) {
       console.error('[fleet-notify]', chatId, e);
