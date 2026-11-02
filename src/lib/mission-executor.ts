@@ -126,8 +126,10 @@ export async function executeReadyStep(taskId: string, stepIndex?: number) {
   if (step.status === 'pending' && idx > 0) {
     return { status: 'pending', message: 'Aguardando handoff anterior' };
   }
+  // ready | approved | running ok to execute
 
   const sql = getSql();
+  const wasApproved = step.status === 'approved';
   await sql`
     UPDATE task_steps SET status = 'running', started_at = COALESCE(started_at, NOW())
     WHERE id = ${step.id}
@@ -169,20 +171,23 @@ export async function executeReadyStep(taskId: string, stepIndex?: number) {
     } else if (step.role === 'worker' || /plut[aã]o/i.test(agentLabel)) {
       if (execMode === 'real') {
         const plutaoUrl = process.env.PLUTAO_API_URL || 'https://plutao-os.vercel.app';
-        const data = await callAgentWithResilience(
-          plutaoUrl,
-          {
-            task_id: taskId,
-            step_index: idx,
-            input,
-            command: 'execute_real',
-            mission_title: mission.task.title,
-            mission_context: input,
-          },
-          'Plutao'
-        );
+        const payload: Record<string, unknown> = {
+          task_id: taskId,
+          step_index: idx,
+          input,
+          command: 'execute_real',
+          mission_title: mission.task.title,
+          mission_context: input,
+        };
+        // After operator write-gate: allow real MCP/connector writes on Plutão
+        if (wasApproved || step.approved_by) {
+          payload.approved = true;
+          payload.approved_by = step.approved_by || 'operator';
+          payload.gate = 'approved';
+        }
+        const data = await callAgentWithResilience(plutaoUrl, payload, 'Plutao');
         output = String(data.output || JSON.stringify(data));
-        if (data.gated || data.status === 'awaiting_approval') {
+        if (!wasApproved && (data.gated || data.status === 'awaiting_approval')) {
           await sql`
             UPDATE task_steps
             SET status = 'awaiting_approval', output = ${output}, finished_at = NOW()
@@ -269,7 +274,7 @@ export async function advanceMission(taskId: string) {
       logs.push(`step ${idx}: pending`);
       break;
     }
-    logs.push(`step ${idx}: executing ${step.agent_name || step.role}`);
+    logs.push(`step ${idx}: executing ${step.agent_name || step.role} (${step.status})`);
     const r = await executeReadyStep(taskId, idx);
     logs.push(`step ${idx}: ${r.status}`);
     if (r.status === 'awaiting_approval') break;

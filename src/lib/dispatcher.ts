@@ -149,20 +149,19 @@ export async function completeStep(opts: {
   const step = mission.steps.find((s: any) => s.step_index === idx);
   if (!step) throw new Error('Step not found');
 
-  if (step.requires_approval && step.status !== 'approved') {
-    if (step.status !== 'awaiting_approval') {
-      await sql`
-        UPDATE task_steps SET status = 'awaiting_approval', output = ${opts.output}, started_at = COALESCE(started_at, NOW())
-        WHERE id = ${step.id}
-      `;
-      await notifyOperatorTelegram({
-        kind: 'need_confirm',
-        agentName: step.agent_name || opts.agentName,
-        title: 'Aprovação necessária',
-        detail: `Tarefa: ${mission.task.title}\nPasso ${idx} (${step.role})\n\n${opts.output.slice(0, 800)}\n\n<code>/approve ${opts.taskId}</code>\n<code>/reject ${opts.taskId}</code>`,
-        taskId: opts.taskId,
-      }).catch(() => {});
-    }
+  // Gate only when still awaiting — approved steps already passed the gate
+  if (step.requires_approval && step.status === 'awaiting_approval') {
+    await sql`
+      UPDATE task_steps SET status = 'awaiting_approval', output = ${opts.output}, started_at = COALESCE(started_at, NOW())
+      WHERE id = ${step.id}
+    `;
+    await notifyOperatorTelegram({
+      kind: 'need_confirm',
+      agentName: step.agent_name || opts.agentName,
+      title: 'Aprovação necessária',
+      detail: `Tarefa: ${mission.task.title}\nPasso ${idx} (${step.role})\n\n${opts.output.slice(0, 800)}`,
+      taskId: opts.taskId,
+    }).catch(() => {});
     return { status: 'awaiting_approval', mission: await getMission(opts.taskId) };
   }
 
@@ -183,7 +182,7 @@ export async function completeStep(opts: {
       kind: 'completed',
       agentName: 'Aegis Dispatcher',
       title: 'Missão concluída',
-      detail: `${mission.task.title}\n\n${opts.output.slice(0, 800)}\n\nDocumento de auditoria em seguida…`,
+      detail: `${mission.task.title}\n\n${opts.output.slice(0, 800)}`,
       taskId: opts.taskId,
     }).catch(() => {});
 
@@ -214,6 +213,7 @@ export async function completeStep(opts: {
   return { status: 'handed_off', nextStep: nextIdx, mission: await getMission(opts.taskId) };
 }
 
+/** Mark step approved; executor re-calls Plutão with approved=true on advance. */
 export async function approveStep(taskId: string, approvedBy: string) {
   if (!isChatAllowed(approvedBy)) {
     throw new Error('Chat/usuário não autorizado para aprovar missões.');
@@ -234,17 +234,13 @@ export async function approveStep(taskId: string, approvedBy: string) {
   if (step.status !== 'awaiting_approval') {
     throw new Error(`Não é possível aprovar: passo atual está em estado '${step.status}' (esperado: 'awaiting_approval')`);
   }
+
   await sql`
     UPDATE task_steps SET status = 'approved', approved_at = NOW(), approved_by = ${approvedBy}
     WHERE id = ${step.id}
   `;
 
-  return completeStep({
-    taskId,
-    stepIndex: idx,
-    output: step.output || 'Aprovado pelo operador',
-    agentName: step.agent_name,
-  });
+  return { status: 'approved', mission: await getMission(taskId) };
 }
 
 export async function rejectStep(taskId: string, reason: string, by: string) {
